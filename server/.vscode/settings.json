@@ -1,0 +1,49 @@
+{
+    "editor.renderWhitespace": "trailing",
+    "editor.scrollBeyondLastLine": false,
+    "editor.minimap.enabled": true,
+    "editor.trimAutoWhitespace": true,
+    "files.insertFinalNewline": true,
+    "workbench.activityBar.visible": true,
+    "go.buildOnSave": "off",
+    "go.lintOnSave": "workspace",
+    "go.vetOnSave": "workspace",
+    "go.buildTags": "",
+    "go.buildFlags": [],
+    "go.lintTool": "golangci-lint",
+    "go.lintFlags": [
+        "--fast"
+    ],
+    "go.vetFlags": [],
+    "go.testOnSave": true,
+    "go.coverOnSave": false,
+    "go.useCodeSnippetsOnFunctionSuggest": true,
+    "editor.formatOnSave": true,
+    "go.formatTool": "goimports",
+    "go.formatFlags": [],
+    "go.goroot": "",
+    "go.gopath": "",
+    "go.inferGopath": false,
+    "go.gocodeAutoBuild": false,
+    "go.testFlags": [
+        "-v"
+    ],
+    "go.useLanguageServer": true,
+    "go.docsTool": "gogetdoc",
+    "go.liveErrors": {
+        "enabled": true,
+        "delay": 500,
+    },
+    "files.exclude": {
+        "**/.git": true, // this is a default value
+        "**/.DS_Store": true, // this is a default value
+        "**/node_modules": true, // this excludes all folders 
+        // named "node_modules" from 
+        // the explore tree
+        // alternative version
+        "node_modules": true, // this excludes the folder 
+        // only from the root of
+        // your workspace
+        ".pytest_cache": true
+    }
+}
