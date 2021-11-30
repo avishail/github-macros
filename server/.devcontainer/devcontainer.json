@@ -1,0 +1,12 @@
+{
+   "dockerFile": "Dockerfile",
+   "extensions": [
+      "ms-vscode.go",
+      "golang.Go",
+      "eamodio.gitlens",
+      "ms-azuretools.vscode-docker",
+      "humao.rest-client",
+      "vscode-icons-team.vscode-icons",
+      "zxh404.vscode-proto3"
+   ],
+}
