@@ -24,7 +24,7 @@ const queryTypeGet = "get"
 const queryTypeSuggestion = "suggestion"
 const resultsPerPage = 20
 
-func getQuery(r *http.Request, client *bigquery.Client) *bigquery.Query {
+func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error) {
 	queryText := r.URL.Query().Get("text")
 	page, err := strconv.Atoi(r.URL.Query().Get("page"))
 
@@ -49,7 +49,7 @@ func getQuery(r *http.Request, client *bigquery.Client) *bigquery.Query {
 			},
 			{
 				Name:  "limit",
-				Value: resultsPerPage,
+				Value: resultsPerPage + 1,
 			},
 			{
 				Name:  "offset",
@@ -65,24 +65,24 @@ func getQuery(r *http.Request, client *bigquery.Client) *bigquery.Query {
 				Value: strings.Split(queryText, ","),
 			},
 		}
-	case queryTypeSuggestion:
-		fallthrough
-	default:
+	case "", queryTypeSuggestion:
 		log.Printf("suggestion: offset: %v", offset)
 		query = client.Query("SELECT * FROM `github-macros.macros.macros` ORDER BY usages, name DESC LIMIT @limit OFFSET @offset")
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "limit",
-				Value: resultsPerPage,
+				Value: resultsPerPage + 1,
 			},
 			{
 				Name:  "offset",
 				Value: offset,
 			},
 		}
+	default:
+		return nil, fmt.Errorf("unknown query type: %s", r.URL.Query().Get("type"))
 	}
 
-	return query
+	return query, nil
 }
 
 func execQuery(r *http.Request) (string, error) {
@@ -94,14 +94,19 @@ func execQuery(r *http.Request) (string, error) {
 	}
 	defer client.Close()
 
-	query := getQuery(r, client)
+	query, err := getQuery(r, client)
+	if err != nil {
+		return "", fmt.Errorf("getQuery: %v", err)
+	}
 
 	iter, err := runQuery(ctx, query)
 	if err != nil {
 		return "", fmt.Errorf("runQuery: %v", err)
 	}
 
-	var rows []row
+	rows := []row{}
+
+	isQueryGet := r.URL.Query().Get("type") == queryTypeGet
 
 	for {
 		var curRow row
@@ -116,13 +121,21 @@ func execQuery(r *http.Request) (string, error) {
 		}
 
 		rows = append(rows, curRow)
+
+		if len(rows) == resultsPerPage && !isQueryGet {
+			break
+		}
 	}
 
-	if rows == nil {
-		return "[]", nil
+	responseMap := map[string]interface{}{
+		"data": rows,
 	}
 
-	response, err := json.Marshal(rows)
+	if !isQueryGet {
+		responseMap["has_more"] = iter.TotalRows > resultsPerPage
+	}
+
+	response, err := json.Marshal(responseMap)
 	if err != nil {
 		return "", fmt.Errorf("error marshaling results: %v", err)
 	}
@@ -131,6 +144,8 @@ func execQuery(r *http.Request) (string, error) {
 }
 
 func Query(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Access-Control-Allow-Origin", "*")
+
 	response, err := execQuery(r)
 
 	if err != nil {
