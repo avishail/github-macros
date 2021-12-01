@@ -92,7 +92,7 @@ func validateInput(r *http.Request, client *bigquery.Client) (isValid bool, erro
 
 	isValid = !isExist
 
-	return
+	return isValid, errorMessage, nil
 }
 
 func getMutationQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error) {
@@ -144,24 +144,22 @@ func getMutationQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query
 	return query, nil
 }
 
-type response struct {
-	Success      bool   `json:"status"`
-	ErrorMessage string `json:"error_message"`
-}
-
 func getResponse(errorMessage string) (string, error) {
-	res := &response{
-		Success:      errorMessage == "",
-		ErrorMessage: errorMessage,
+	responseMap := map[string]interface{}{
+		"success": errorMessage == "",
 	}
 
-	strRes, err := json.Marshal(res)
+	if errorMessage != "" {
+		responseMap["error_message"] = errorMessage
+	}
+
+	response, err := json.Marshal(responseMap)
 
 	if err != nil {
 		return "", fmt.Errorf("error while marshaling response: %v", err)
 	}
 
-	return string(strRes), nil
+	return string(response), nil
 }
 
 func execMutate(r *http.Request) (string, error) {
@@ -202,6 +200,8 @@ func execMutate(r *http.Request) (string, error) {
 }
 
 func Mutate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Access-Control-Allow-Origin", "*")
+
 	response, err := execMutate(r)
 
 	if err != nil {
