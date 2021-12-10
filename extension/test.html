@@ -10,7 +10,18 @@
 
     -->
     <head>
+        <link href='https://fonts.googleapis.com/css?family=Pragati Narrow' rel='stylesheet'>
         <style>
+            .no-outline {
+                border-top-style: hidden;
+                border-right-style: hidden;
+                border-left-style: hidden;
+                border-bottom-style: hidden;
+            }
+            
+            .no-outline:focus {
+                outline: none;
+            }
             .loader,
             .loader:after {
                 border-radius: 50%;
@@ -62,71 +73,90 @@
                 -ms-overflow-style: none;  /* IE and Edge */
                 scrollbar-width: none;  /* Firefox */
             }
+
+            .tooltipBorder .jBox-container,
+            .tooltipBorder .jBox-pointer:after {
+                border: 2px solid #234C87;
+            }
+
+            .box-shadow {
+                box-shadow: 0px 6px 10px rgba(0, 0, 0, 0.14), 0px 1px 18px rgba(0, 0, 0, 0.12), 0px 3px 5px rgba(0, 0, 0, 0.2);
+            }
+
+            .box-hover:hover {
+               background-color: #ad2569; 
+            }
+
+            #login {
+                position: fixed;
+                float: left;
+                background-color: none;
+                margin-left: 1.5%;
+                top: 1em;
+                height: 1.25em;
+                width: 7em;
+                text-align: center;
+                border-radius: .3em;
+                opacity: .5;
+                padding-top: 1em;
+                border: .18em solid rgb(235, 0, 0);
+            }
+
+            #login:hover {
+                background-color: rgb(27, 143, 71);
+            }
         </style>
-        <!-- <script>
-            window.onload = function() {
-                const div = document.createElement('div');
-                document.body.append(div)
-                div.style.width="500px";
-                div.style.height="600px";
-                div.style.backgroundColor = '#FFFFFF';
-                div.style.position = 'fixed';
-                div.style.right = '5px';
-                div.style.bottom = '5px';
-                div.style.border = "1px #abb0ae";
-                div.style.borderRadius = "10px";
-                div.style.boxShadow = "0px 0px 2px 1px #888888";
-                div.style.overflowY = "scroll";
-            }    
-        </script> -->
+
+        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/gh/StephanWagner/jBox@v1.3.2/dist/jBox.all.min.js"></script>
+        <link href="https://cdn.jsdelivr.net/gh/StephanWagner/jBox@v1.3.2/dist/jBox.all.min.css" rel="stylesheet">
+
         <script>
-            let input;
-            let leftMacroDiv
-            let rightMacroDiv
-            let resultsSpinner
-            let page = 0
-            let cache = {}
+            let resultsCache = new Map()
+            const tooltipsCache = new Map();
+            let batchFetchCounter = 0
 
-            initGlobals = function() {
-                input = document.getElementById('input');
-                leftMacroDiv = document.getElementById('leftMacros');
-                rightMacroDiv = document.getElementById('rightMacros');
-                resultsSpinner = document.getElementById('resultsSpinner');
+            getElement = function(targetId, id) {
+                return $('#' + targetId + '_' + id)[0]
             }
 
-            initHideWindow = function() {
-                const target = document.getElementById('macroMainWindow')
-
-                document.addEventListener('click', (event) => {
-                    const withinBoundaries = event.composedPath().includes(target)
-
-                    if (withinBoundaries) {
-                        console.log('Click happened inside element')
-                    } else {
-                        console.log('Click happened **OUTSIDE** element')
-                    } 
-                })
+            showSearchSpinner = function(targetId) {
+                getElement(targetId, 'searchSpinner').style.display = 'inline';
+                getElement(targetId, 'searchIcon').style.display = 'none';
             }
 
-            initInputLogic = function () {
-                input.focus();
-                const inputSpinner = document.getElementById('inputSpinner');
-                input.addEventListener('input', updateValue);
+            hideSearchSpinner = function(targetId) {
+                getElement(targetId, 'searchSpinner').style.display = 'none';
+                getElement(targetId, 'searchIcon').style.display = 'inline';
+            }
+
+            initSearchInput = function (targetId) {
+                const searchInput = getElement(targetId, 'macroSearchInput');
+                searchInput.addEventListener('input', updateValue);
 
                 let inputTimerId = null;
 
                 function updateValue(e) {
-                    page = 0;
                     if (inputTimerId != null) {
                         clearTimeout(inputTimerId);
+                        inputTimerId = null;
                     }
 
-                    inputSpinner.style.visibility = "visible";
+                    if (resultsCache.has(searchInput.value)) {
+                        response = resultsCache.get(searchInput.value)
+                        processResponse(targetId, response, true, null)
+                        hideSearchSpinner(targetId)
+                        return
+                    }
+
+                    showSearchSpinner(targetId)
+
                     inputTimerId = setTimeout(
                         () => {
-                            fetchNextBatch(
+                            fetchNextPage(
+                                targetId,
                                 () => {
-                                    inputSpinner.style.visibility = "hidden";
+                                    hideSearchSpinner(targetId)
                                     inputTimerId = null;
                                 }
                             )                            
@@ -136,25 +166,30 @@
                 }
             }
 
-            processResponse = function (searchText, response, cacheResults) {
-                if (page === 0) {
+            processResponse = function (targetId, response, isFirstPage, searchText) {
+                leftMacroDiv = getElement(targetId, 'leftMacros');
+                rightMacroDiv = getElement(targetId, 'rightMacros');
+
+                if (isFirstPage) {
                     leftMacroDiv.innerHTML = '';
                     rightMacroDiv.innerHTML = '';                            
                 }
 
-                resultsSpinner.style.display = response['has_more'] ? 'inline' : 'none';
+                getElement(targetId, 'moreResultsSpinner').style.display = response['has_more'] ? 'inline' : 'none';
 
                 let divs = [leftMacroDiv, rightMacroDiv];
                 const results = response['data'];
                 for (var i = 0; i < results.length; i++) {
                     const result = results[i];
 
-                    if (cacheResults) {
-                        cache[searchText]['data'].push(result)
+                    if (searchText !== null) {
+                        resultsCache.get(searchText)['data'].push(result)
                     }
                     const image = document.createElement('img');
                     image.style.width = '100%';
-                    image.style.marginBottom = '1px';
+                    image.style.marginTop = '5px';
+                    image.style.marginBottom = '5px';
+                    image.style.borderRadius = '5px';
                     image.src = result['url'];
                     image.title = result['name'];
                     image.onclick = function() {alert(result['name'])};
@@ -162,36 +197,34 @@
                 }
             }
 
-            fetchNextBatch = function (onFinishCallback) {
-                const searchText = input.value
+            fetchNextPage = function(targetId, onFinishCallback) {
+                batchFetchCounter++
+
+                const searchText = getElement(targetId, 'macroSearchInput').value
+
+                const curBatchFetch = batchFetchCounter
                 const xhttp = new XMLHttpRequest();
 
-                if (searchText in cache) {
-                    response = cache[searchText]
-                    processResponse(searchText, response, false)
-                    page = response['page']
-                    if (onFinishCallback) {
-                        onFinishCallback()
-                    }
-                    return
-                }
+                const pageToFetch = resultsCache.has(searchText) ? resultsCache.get(searchText)['next_page'] : 0
 
                 xhttp.onreadystatechange = function() {
                     if (this.readyState !== 4 || this.status !== 200) {
                         return
                     }
 
-                    if (!(searchText in cache)) {
-                        cache[searchText] = {'data': [], 'has_more': false, 'page': 0}
+                    if (curBatchFetch != batchFetchCounter) {
+                        return
+                    }
+
+                    if (!resultsCache.has(searchText)) {
+                        resultsCache.set(searchText, {'data': [], 'has_more': false, 'next_page': 0})
                     }
 
                     response = JSON.parse(this.responseText);
-                    processResponse(searchText, response, true)
+                    processResponse(targetId, response, pageToFetch == 0, searchText)
 
-                    page++
-
-                    cache[searchText]['has_more'] = response['has_more']
-                    cache[searchText]['page'] = page
+                    resultsCache.get(searchText)['has_more'] = response['has_more']
+                    resultsCache.get(searchText)['next_page'] = pageToFetch + 1
 
                     if (onFinishCallback) {
                         onFinishCallback()
@@ -203,57 +236,187 @@
                 if (searchText !== '') {
                     url.searchParams.append('type', 'search')
                     url.searchParams.append('text', searchText)
-                    url.searchParams.append('page', page)
+                    url.searchParams.append('page', pageToFetch)
                 } else {
                     url.searchParams.append('type', 'suggestion')
-                    url.searchParams.append('page', page)
+                    url.searchParams.append('page', pageToFetch)
                 }
                 xhttp.open("GET", url.toString(), true);
                 xhttp.send();
             }
 
-            window.onload = function() {
-                initGlobals()
-                initHideWindow()
-                initInputLogic()
-                fetchNextBatch()
+            createTooltip = function(targetId, target) {
+                idPrefix = targetId + '_';
+                return new jBox(
+                    'Tooltip',
+                    {
+                        // attach: '#'+target_id,
+                        target: target,
+                        //theme: 'TooltipBorder',
+                        addClass: 'tooltipBorder',
+                        // trigger: 'click', //TODO remove that
+                        width: '300px',
+                        height: '400px',
+                        // adjustTracker: true,
+                        closeOnClick: 'body',
+                        closeOnEsc: true,
+                        // animation: 'move',
+                        position: {
+                            x: 'left',
+                            y: 'top'
+                        },
+                        outside: 'y',
+                        pointer: 'left:20',
+                        offset: {
+                            x: 25
+                        },
+                        onCreated: function () {
+                            initNewTooltip(targetId);
+                        },
+                        onOpen: function () {
+                            if (resultsCache.has('')) {
+                                response = resultsCache.get('');
+                                processResponse(targetId, response, true, null);
+                            } else {
+                                fetchNextPage(targetId);
+                            }
+                        },
+                        onOpenComplete: function () {
+                            getElement(targetId, 'macroSearchInput').focus();
+                        },
+                        onClose: function () {
+                            handleCloseTooltip(targetId);
+                        },
+                        content:`
+                        <div style="width: 100%; height: 100%; position: absolute; top: 0px; left: 0px; right: 0px; bottom: 0px; overflow: hidden">
+                            <div style="display: flex; flex-direction: row; height: 55px;">
+                                <div style="display: flex; flex-direction: row; width: 100%; height: auto; margin: 10px; border-width: 1px; border-style: solid none solid solid; border-color: #234C87; border-radius: 18px; overflow: auto">
+                                    <div style="display: flex; margin-left: 10px; width: 15px; height: 15px; justify-content: center; align-items: center; height: 100%; ">
+                                        <img id="${idPrefix}searchIcon" style="width: 15px; height: 15px;" src="mglass-4x.png" />
+                                        <div id="${idPrefix}searchSpinner" style="display: none;" class="loader"></div>
+                                    </div>
+                                    <div style="display: flex; justify-content: center; align-items: center; height: 100%; flex-grow: 1;">
+                                        <input class="no-outline" type="text" id="${idPrefix}macroSearchInput" style="width: 100%; padding-left: 12px;">
+                                    </div>
+                                    <div style="display: flex; justify-content: center; align-items: center; height: 100%; width: 70px; background-color: #234C87; border-radius: 10px 0 0 10px;">
+                                        <text style="font-family: 'Pragati Narrow'; font-weight: 700; color: white; user-select: none;">Search</text>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="${idPrefix}macrosSection" class="hideScrollbar" style="width: 100%; height: 340px; overflow: auto; display: flex; flex-direction: column;">
+                                <div style="width: 100%; display: flex; flex-direction: row; flex:1; padding-top: 5px">
+                                    <div id="${idPrefix}leftMacros" style="width: 55%; margin-left: 10px; margin-right: 5px;">
+                                    </div>
+                                    <div id="${idPrefix}rightMacros" style="width: 45%; margin-left: 5px; margin-right: 10px;">
+                                    </div>
+                                </div>
+                                <div id="${idPrefix}moreResultsSpinner" style="width: 100%; height: 40px;flex-shrink: 0; align-items: center; display: flex;">
+                                    <div class="loader" style="font-size: 2px;"></div>
+                                </div>
+                            </div>
+                            <div class="box-shadow box-hover" style="z-index: 100; display: flex; justify-content: center; align-items: center; position: absolute; right: 16px; bottom: 16px; width: 30px; height: 30px; background-color: #234C87; border-radius: 15px;" onmouseover="this.style.background='#526683';" onmouseout="this.style.background='#234C87';">
+                                <img style="width: 7px; height: 7px" src="plus-4x.png" />
+                            </div>    
+                        </div>
+                        `,
+                    },
+                )
             }
+
+            makeid = function(length) {
+                var result           = '';
+                const characters       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                const charactersLength = characters.length;
+                for ( var i = 0; i < length; i++ ) {
+                    result += characters.charAt(Math.floor(Math.random() * charactersLength));
+                }
+                return result;
+            }
+
+            createTooltipMeta = function(target) {
+                const targetId = makeid(10)
+                const tooltip = createTooltip(targetId, target);
+
+                const newTooltipMeta = {
+                    'targetId': targetId,
+                    'tooltip': tooltip,
+                    'wasInit': false,
+                };
+
+                return newTooltipMeta
+            }
+
+            handleCloseTooltip = function(targetId) {
+                getElement(targetId, 'macroSearchInput').value = '';
+                hideSearchSpinner(targetId);
+                batchFetchCounter++;
+                getElement(targetId, 'leftMacros').innerHTML = '';
+                getElement(targetId, 'rightMacros').innerHTML = '';
+            }
+
+            initNewTooltip = function(targetId) {
+                initSearchInput(targetId);
+
+                macrosSection = getElement(targetId, 'macrosSection');
+                // init scroll of the macros section
+                macrosSection.addEventListener(
+                    "onwheel" in document ? "wheel" : "mousewheel",
+                    e => {
+                        e.wheel = e.deltaY ? -e.deltaY : e.wheelDelta/40;
+                        macrosSection.scrollTop -= e.wheel;
+                    },
+                );
+            }
+
+            openTooltip = function(target) {
+                var tooltipMeta;
+                if (tooltipsCache.has(target)) {
+                    tooltipMeta = tooltipsCache.get(target);
+                } else {
+                    tooltipMeta = createTooltipMeta(target);
+                    tooltipsCache.set(target, tooltipMeta);
+                }
+
+                tooltipMeta["tooltip"].open()
+            }    
+
+
+            initKeyboardListeners = function() {
+                document.onkeydown = function(ev) {
+                    activeElement = document.activeElement
+                    // TODO needs to be configured whether we wanna do it also
+                    // for regular input + exlusion of our input fields
+                    if (!(activeElement instanceof HTMLTextAreaElement)) {
+                        return
+                    }
+
+                    const text = activeElement.value
+                    const pos = activeElement.selectionStart
+
+                    // we open only for ! that is the beginning of a new word
+                    if (ev.key === '!' && (pos === 0 || text[pos-1] === ' ') && (pos === text.length || text[pos] === ' ')) {
+                        setTimeout(() => openTooltip(activeElement), 0)
+                    }
+                };
+            }
+
+            window.onload = function() {
+                initKeyboardListeners()
+            }
+
+            //TODO implement click on image
+            //TODO implement $name$ functionality
         </script>
     </head>
     <body>
-        <div id="macroMainWindow" style="display: flex; flex-direction: column; width: 300px; height: 400px; background-color: rgb(255, 255, 255); position: fixed; right: 10px; bottom: 5px; border: 1px rgb(171, 176, 174); border-radius: 10px; box-shadow: rgb(136, 136, 136) 0px 0px 2px 1px; overflow: hidden;">
-            <!-- Search Bar -->
-            <div style="display: flex; flex-direction: row; height: 50px; margin: 10px;">
-                <div style="display: flex; flex-grow: 1; height: 40px; margin-right: 10px; position: relative; overflow: hidden;">
-                    <input id="input" type="text" id="macrosearch" placeholder="Search for macro by name" style="width: 100%; height: 40px; padding: 12px 20px; display: inline-block; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
-                    <div style="display: flex; margin-right: 5px; width: 15px; height: 100%; position: absolute; right: 0px; bottom: 0px; align-items: center; align-content: center; justify-content: center;">
-                        <div id="inputSpinner" style="visibility: hidden;" class="loader"></div>
-                    </div>
-                </div>
-                <button style="width: 40px; height: 40px; flex-shrink: 1;">+</button>
-            </div>
-
-            <!-- Macros Content -->
-            <div class="hideScrollbar" style="width: 100%; display: flex; flex-direction: column; flex:1; overflow: auto;">
-                <div style="width: 100%; display: flex; flex-direction: row; flex:1;">
-                    <div id="leftMacros" style="width: 50%; margin-left: 1px; margin-right: 0.5px;">
-                        <!-- <img onclick="alert('a');" title="battleshipit" style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg">
-                        <img style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg">
-                        <img style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg">
-                        <img style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg">
-                        <img style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg"> -->
-                    </div>
-                    <div id="rightMacros" style="width: 50%; margin-left: 0.5px; margin-right: 1px;">
-                        <!-- <img style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142867948-155501a9-2603-4c24-b179-9f7d1aa22bb0.gif">
-                        <img style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142876991-6d871138-5003-440f-ae84-8198f1094480.gif">
-                        <img style="width: 100%; margin-bottom: 1px;" src="https://user-images.githubusercontent.com/10358078/142867948-155501a9-2603-4c24-b179-9f7d1aa22bb0.gif"> -->
-                    </div>
-                </div>
-                <div id="resultsSpinner" style="width: 100%; height: 40px;flex-shrink: 0; align-items: center; display: flex;">
-                    <div class="loader" style="font-size: 2px;"></div>
-                </div>
-            </div>
+        <div id="login"></div>
+        <div style="height: 2000px; width: 200px; background-color: #526683"></div>
+        <textarea rows="4" cols="50"></textarea>
+        <div style="height: 2000px; width: 200px; background-color: #999"></div>
+        <textarea rows="4" cols="50"></textarea>
+        <div style="height: 200px; width: 200px; background-color: rgb(26, 182, 12); overflow-y: scroll;">
+            <div style="height: 150px; width: 200px; background-color: rgb(134, 16, 99)"></div>
+            <div style="height: 150px; width: 200px; background-color: rgb(252, 6, 178)"></div>
         </div>
-        <div style="height: 4000px; width: 400px; background-color: #999" />
     </body>
 </html>
