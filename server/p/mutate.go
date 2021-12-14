@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
+	"strconv"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
@@ -17,6 +17,15 @@ import (
 const mutateTypeAdd = "add"
 const mutateTypeUse = "use"
 const mutateTypeReport = "report"
+
+const reportsThreshold = 10
+
+var supportedTypes = map[string]bool{
+	"image/gif":  true,
+	"image/png":  true,
+	"image/bmp":  true,
+	"image/jpeg": true,
+}
 
 func isMacroExist(name string, client *bigquery.Client) (bool, error) {
 	query := client.Query(
@@ -49,10 +58,81 @@ func isMacroExist(name string, client *bigquery.Client) (bool, error) {
 	return iter.TotalRows > 0, nil
 }
 
-func isURLValid(macroURL string) bool {
-	_, err := url.ParseRequestURI(macroURL)
+func getFileSize(r *http.Response) int64 {
+	if r.Header.Get("Content-Range") != "" {
+		parts := strings.Split(r.Header.Get("Content-Range"), "/")
+		if len(parts) == 2 {
+			size, err := strconv.ParseInt(parts[1], 10, 64)
+			if err == nil {
+				return size
+			}
+		}
+	}
 
-	return err == nil
+	if r.Header.Get("Content-Length") != "" {
+		size, err := strconv.ParseInt(r.Header.Get("Content-Length"), 10, 64)
+		if err == nil {
+			if size > r.ContentLength {
+				return size
+			}
+
+			return r.ContentLength
+		}
+	}
+
+	return r.ContentLength
+}
+
+func validateURL(url string) (isValid bool, errorMessage string) {
+	req, err := http.NewRequestWithContext(context.Background(), "GET", url, http.NoBody)
+
+	if err != nil {
+		isValid = false
+		errorMessage = "Invalid URL."
+
+		return
+	}
+
+	req.Header.Add("Range", "bytes=0-512")
+
+	var client http.Client
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		isValid = false
+		errorMessage = "Unable to process image from URL"
+
+		return
+	}
+
+	if getFileSize(resp) > 1024*1024*1.5 {
+		isValid = false
+		errorMessage = "Image exceeds 1.5Mb"
+
+		return
+	}
+
+	body := make([]byte, 512)
+	_, err = resp.Body.Read(body)
+
+	if err != nil {
+		isValid = false
+		errorMessage = "Unable to process image from URL"
+
+		return
+	}
+
+	str := http.DetectContentType(body)
+
+	if _, ok := supportedTypes[str]; !ok {
+		isValid = false
+		errorMessage = "Unknown image format. Only jpeg, gif, png and bmp are supported"
+
+		return
+	}
+
+	return true, ""
 }
 
 func validateInput(r *http.Request, client *bigquery.Client) (isValid bool, errorMessage string, err error) {
@@ -64,17 +144,16 @@ func validateInput(r *http.Request, client *bigquery.Client) (isValid bool, erro
 	name := r.Form.Get("name")
 	macroURL := r.Form.Get("url")
 
-	if strings.Contains(name, "") {
+	if strings.Contains(name, " ") {
 		isValid = false
-		errorMessage = "Macro name can't contain spaces"
+		errorMessage = "Name can't contain spaces"
 
 		return
 	}
 
-	if !isURLValid(macroURL) {
-		isValid = false
-		errorMessage = "URL is not valid"
+	isValid, errorMessage = validateURL(macroURL)
 
+	if !isValid {
 		return
 	}
 
@@ -87,7 +166,7 @@ func validateInput(r *http.Request, client *bigquery.Client) (isValid bool, erro
 	}
 
 	if isExist {
-		errorMessage = fmt.Sprintf("Macro named '%s' already exist", name)
+		errorMessage = fmt.Sprintf("The name '%s' already exist", name)
 	}
 
 	isValid = !isExist
@@ -162,6 +241,70 @@ func getResponse(errorMessage string) (string, error) {
 	return string(response), nil
 }
 
+func revalidateMacro(name string, client *bigquery.Client) error {
+	ctx := context.Background()
+
+	query := client.Query(
+		"SELECT url, reports FROM `github-macros.macros.macros` WHERE name=@name",
+	)
+	query.Parameters = []bigquery.QueryParameter{
+		{
+			Name:  "name",
+			Value: name,
+		},
+	}
+
+	iter, err := runQuery(ctx, query)
+	if err != nil {
+		return err
+	}
+
+	type Row struct {
+		URL     string
+		Reports int
+	}
+
+	var row Row
+
+	if err = iter.Next(&row); err != nil {
+		return fmt.Errorf("error fetching reports: %v", err)
+	}
+
+	if row.Reports < reportsThreshold {
+		return nil
+	}
+
+	isValid, _ := validateURL(row.URL)
+
+	if isValid {
+		query = client.Query("UPDATE `github-macros.macros.macros` SET reports = 0 WHERE name=@name")
+		query.Parameters = []bigquery.QueryParameter{
+			{
+				Name:  "name",
+				Value: name,
+			},
+		}
+
+		_, err = runQuery(ctx, query)
+	} else {
+		query = client.Query("DELETE FROM `github-macros.macros.macros` WHERE name=@name")
+		query.Parameters = []bigquery.QueryParameter{
+			{
+				Name:  "name",
+				Value: name,
+			},
+		}
+
+		_, err = runQuery(ctx, query)
+	}
+
+	if err != nil {
+		return fmt.Errorf("error while revalidating URL: %v", err)
+	}
+
+	return nil
+}
+
 func execMutate(r *http.Request) (string, error) {
 	if err := r.ParseForm(); err != nil {
 		return "", fmt.Errorf("error while parsing form: %v", err)
@@ -194,6 +337,13 @@ func execMutate(r *http.Request) (string, error) {
 
 	if err != nil {
 		return "", fmt.Errorf("error while running query: %v", err)
+	}
+
+	if r.Form.Get("type") == mutateTypeReport {
+		err = revalidateMacro(r.Form.Get("name"), client)
+		if err != nil {
+			return "", fmt.Errorf("error while revalidate macro: %v", err)
+		}
 	}
 
 	return getResponse("")
