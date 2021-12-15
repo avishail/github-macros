@@ -1,13 +1,17 @@
 /*
     TODO
     1. basic add flow with some client side validation
-    2. use local storage to store the first suggestions batch. Load them
-    3. store in local storage the last X macros you used. Show them
-    4. settings - configure more sites and set the action keys
-    5. fetch and show small footer from the server? Ask Sivan
-    6. test load more
+    2. keep track of the last 100 usages, store it in local storage, load it during boot and place the top X 
+       need to see how we make sure we will know how to load more suggestions nicely
+       with top usages - DONE but needs to be tested
+    3. settings - configure more sites and set the action keys
+    4. fetch and show small footer from the server? Ask Sivan
+    5. test load more
 */
 
+const numberOfTopUsagesToDisplay = 20;
+const maxTopUsagesToStore = 100;
+const maxSuggestionsFreshnessDuration = 60 * 60 * 24;
 const macroNamePrefix = 'github-macros-';
 const loadMorePixelsBeforeScrollEnd = 200;
 const hostnameToPattern = new Map();
@@ -15,6 +19,8 @@ const contentCache = new Map();
 const macroNameToUrl = new Map();
 const tooltipsCache = new Map();
 const targetIdToTarget = new Map();
+const macroTopUsages = [];
+const nameToTopUsage = new Map();
 
 getElement = function(targetId, id) {
     return $('#' + targetId + '_' + id)[0]
@@ -69,7 +75,7 @@ initSearchInput = function (targetId) {
                     searchText,
                     0,
                     (content) => {
-                        updateCacheWithNewPageContent(searchText, content);
+                        updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
                         
                         ongoingRequests.delete(searchText);
 
@@ -116,7 +122,10 @@ selectMacro = function(targetId, macro) {
     target.selectionStart = selectionIndex + macroToInject.length;
     target.selectionEnd = target.selectionStart;
 
-    $.post( "https://us-central1-github-macros.cloudfunctions.net/mutate/", { type: "use", name: macro["name"] } );
+    setTimeout(() => {
+        updateTopUsages(macro);
+        $.post( "https://us-central1-github-macros.cloudfunctions.net/mutate/", { type: "use", name: macro["name"] } );
+    }, 0);
 }
 
 /*
@@ -159,23 +168,34 @@ fetchContent = function(targetId, searchText, pageToFetch, onFinishCallback, onE
     });
 }
 
-updateCacheWithNewPageContent = function(searchText, content) {
+updateCacheWithNewContent = function(searchText, items, isRealPage, hasMore) {
     if (!contentCache.has(searchText)) {
         contentCache.set(searchText, {'data': [], 'has_more': false, 'next_page': 0})
     }
 
     cachedContent = contentCache.get(searchText)
 
-    const items = content['data'];
     for (var i = 0; i < items.length; i++) {
         const item = items[i];
+
+        if (macroNameToUrl.has(item['name'])) {
+            continue;
+        }
+
         cachedContent['data'].push(item);
         macroNameToUrl.set(item['name'], item['url']);
     }
 
-    cachedContent['next_page'] = cachedContent['next_page'] + 1;
-    cachedContent['has_more'] = content['has_more'];
+    if (isRealPage) {
+        cachedContent['next_page'] = cachedContent['next_page'] + 1;
+    }
+    cachedContent['has_more'] = hasMore;    
 
+    if (isNewPage) {
+        
+    } else {
+        cachedContent['has_more'] = true;
+    }
 }
 
 updateUIWithContent = function (targetId, content, isFirstPage) {
@@ -240,7 +260,6 @@ createTooltip = function(targetId, target) {
             onOpen: function () {
                 if (contentCache.has('')) {
                     updateUIFromCache(targetId, '')
-                    // TODO if storgae is too old, trigger a refresh
                     return;
                 }
 
@@ -255,9 +274,12 @@ createTooltip = function(targetId, target) {
                     '',
                     0,
                     (content) => {
-                        updateCacheWithNewPageContent('', content);
+                        updateCacheWithNewContent('', content['data'], true, content['has_more']);
                         updateUIWithContent(targetId, content, true);
-                        // TODO update local storage
+                        chrome.storage.sync.set({
+                            'suggestions': JSON.stringify(content),
+                            'suggestions_freshness': Date.now().toString()
+                        });
                     },
                     () => { fetchWasCalled = false; },
                 )
@@ -489,17 +511,65 @@ initKeyboardListeners = function() {
     };
 }
 
+updateTopUsages = function(macro) {
+    const macroName = macro['name'];
+    if (nameToTopUsage.has(macroName)) {
+        topUsage = nameToTopUsage.get(macroName);
+        topUsage['usages'] = topUsage['usages'] + 1;
+        macroTopUsages.sort(macroTopUsages, (a,b) => {return a['usages'] > b['usages']});
+    } else if (nameToTopUsage.size == maxTopUsagesToStore) {
+        topUsageToRemove = macroTopUsages.pop();
+        nameToTopUsage.delete(topUsageToRemove['name'])
+    }
+
+    if (!nameToTopUsage.has(macroName)) {
+        const newTopUsage = {
+            'name': macroName,
+            'url': macro['url'],
+            'usages': 1,
+        }
+        macroTopUsages.push(newTopUsage);
+        nameToTopUsage.set(macroName, newTopUsage);
+    }
+
+    chrome.storage.sync.set({'top_usages': JSON.stringify(macroTopUsages)});
+}
+
 loadSuggestionsFromStorage = function() {
-    // chrome.storage.sync.get(['foo', 'bar'], function(items) {
-    //     console.log('Settings retrieved', items);
-    //   });
+    chrome.storage.sync.get(['suggestions', 'suggestions_freshness'], function(items) {
+        if ('top_usages' in items) {
+            macroTopUsages = JSON.parse(items['top_usages'])
+            macroTopUsages.sort(macroTopUsages, (a,b) => {return a['usages'] > b['usages']})
+            for (var i = 0; i < macroTopUsages.length; i++) { 
+                const topUsage = macroTopUsages[i];
+                nameToTopUsage.set(topUsage['name'], topUsage);
+            }
+
+            updateCacheWithNewContent('', macroTopUsages.slice(0, numberOfTopUsagesToDisplay), false, true)
+        }
+        
+        if (!('suggestions' in items) || !('suggestions_freshness' in items)) {
+            return;
+        }
+
+        if (Date.now() - parseInt(items['suggestions_freshness']) > maxSuggestionsFreshnessDuration) {
+            return;
+        }
+
+        if ('suggestions' in items) {
+            content = JSON.parse(items['suggestions'])
+            updateCacheWithNewContent('', content['data'], true, content['has_more']);
+        }
+    });
 }
 
 initSupportedHostNames = function() {
     // TODO load from storage with a callback to trigger the rest of the init
     hostnameToPattern.set('github.com', '![$name]($url)');
+    hostnameToPattern.set('gist.github.com', '![$name]($url)');
 }
 
+// put the macro name (appeared in alt property) as the image's title
 processGithubMacroImages = function() {
     $('img').each(function() {
         if (this.alt && this.alt.startsWith(macroNamePrefix)) {
@@ -516,7 +586,7 @@ window.onload = function() {
     }
 
     initKeyboardListeners();
-    // loadSuggestionsFromStorage()
+    loadSuggestionsFromStorage()
     // chrome.storage.sync.set({'foo': 'hello', 'bar': 'hi'}, function() {
     //     console.log('Settings saved');
     // });
