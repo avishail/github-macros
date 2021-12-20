@@ -108,7 +108,7 @@ func validateURL(url string) (isValid bool, errorMessage string) {
 
 	if getFileSize(resp) > 1024*1024*1.5 {
 		isValid = false
-		errorMessage = "Image exceeds 1.5Mb"
+		errorMessage = `Image exceeds 1.5Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`
 
 		return
 	}
