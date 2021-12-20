@@ -23,15 +23,26 @@
     width: 10em;
     height: 10em;
 }
+
+.gh-macros-dark-loader {
+    border-top: 1.1em solid rgba(35,76,135, 0.2);
+    border-right: 1.1em solid rgba(35,76,135, 0.2);
+    border-bottom: 1.1em solid rgba(35,76,135, 0.2);
+    border-left: 1.1em solid #234c87; 
+}
+
+.gh-macros-light-loader {
+    border-top: 1.1em solid rgba(255, 255, 255, 0.2);
+    border-right: 1.1em solid rgba(255, 255, 255, 0.2);
+    border-bottom: 1.1em solid rgba(255, 255, 255, 0.2);
+    border-left: 1.1em solid #FFFFFF;
+}
+
 .gh-macros-loader {
     margin: 1px auto;
     font-size: 1px;
     position: relative;
     text-indent: -9999em;
-    border-top: 1.1em solid rgba(140,130,130, 0.2);
-    border-right: 1.1em solid rgba(140,130,130, 0.2);
-    border-bottom: 1.1em solid rgba(140,130,130, 0.2);
-    border-left: 1.1em solid #8c8282;
     -webkit-transform: translateZ(0);
     -ms-transform: translateZ(0);
     transform: translateZ(0);
@@ -68,6 +79,18 @@
     box-shadow: 0px 6px 10px rgba(0, 0, 0, 0.14), 0px 1px 18px rgba(0, 0, 0, 0.12), 0px 3px 5px rgba(0, 0, 0, 0.2);
 }
 
-.gh-macros-hoover-bg:hover div {
-    background-color: yellow;
+.gh-macros-add-new-error-message {
+    color: #FFFFFF;
+    font-family: 'Pragati Narrow';
+    font-size: 12px;
+}
+
+.gh-macros-add-new-error-message a,
+.gh-macros-add-new-error-message a:link,
+.gh-macros-add-new-error-message a:visited,
+.gh-macros-add-new-error-message a:hover,
+.gh-macros-add-new-error-message a:focus {
+    color: #f87790;
+    font-weight: bold;
+    font-size: 16px;
 }

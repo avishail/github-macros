@@ -1,26 +1,17 @@
 {
-  "name": "Getting Started Example",
-  "description": "Build an Extension!",
+  "name": "GitHub Macros",
+  "description": "Allow the developer to easily add images and gifs to comments",
   "version": "1.0",
   "manifest_version": 3,
-  // "background": {
-  //   "service_worker": "background.js"
-  // },
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "scripting"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "/img/get_started16.png",
-      "32": "/img/get_started32.png",
-      "48": "/img/get_started48.png",
-      "128": "/img/get_started128.png"
+      "128": "/img/icons/icon.png"
     }
   },
   "icons": {
-    "16": "/img/get_started16.png",
-    "32": "/img/get_started32.png",
-    "48": "/img/get_started48.png",
-    "128": "/img/get_started128.png"
+    "128": "/img/icons/icon.png"
   },
   "web_accessible_resources": [
     {
