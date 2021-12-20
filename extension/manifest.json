@@ -1,0 +1,37 @@
+{
+  "name": "GitHub Macros",
+  "description": "Allow the developer to easily add images and gifs to comments",
+  "version": "1.0",
+  "manifest_version": 3,
+  "permissions": ["storage", "scripting"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "128": "/img/icons/icon.png"
+    }
+  },
+  "icons": {
+    "128": "/img/icons/icon.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["img/icons/*.png", "font/*.woff2"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": [ "http://*/*", "https://*/*" ],
+      "js": [
+        "js/jquery-3.6.0.min.js",
+        "js/jBox.all.min.js",
+        "content.js"
+       ],
+       "css": [
+         "css/css.css",
+         "css/jBox.all.min.css"
+       ]
+    }
+  ]
+}

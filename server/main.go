@@ -92,7 +92,7 @@ func testReportMutation() {
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"type=report&name=nonono",
+				"type=report&name=blabla",
 			),
 		),
 		Header: http.Header{
@@ -109,11 +109,11 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	testSearchQuery()
-	testGetQuery()
-	testSuggestionQuery()
+	// testSearchQuery()
+	// testGetQuery()
+	// testSuggestionQuery()
 
-	testAddMutation()
-	testUseMutation()
+	// testAddMutation()
+	// testUseMutation()
 	testReportMutation()
 }
