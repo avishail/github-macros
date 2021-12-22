@@ -7,12 +7,28 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
 )
+
+const (
+	Success                 = 0
+	EmptyName               = 1
+	NameContainsSpaces      = 2
+	NameAlreadyExist        = 3
+	EmptyURL                = 4
+	InvalidURL              = 5
+	URLHostnameNotSupported = 6
+	FileIsTooBig            = 7
+	FileFormatNotSupported  = 8
+	TransientError          = 9
+)
+
+type ErrorCode int
 
 const mutateTypeAdd = "add"
 const mutateTypeUse = "use"
@@ -83,14 +99,20 @@ func getFileSize(r *http.Response) int64 {
 	return r.ContentLength
 }
 
-func validateURL(url string) (isValid bool, errorMessage string) {
-	req, err := http.NewRequestWithContext(context.Background(), "GET", url, http.NoBody)
+func validateURL(macroURL string) ErrorCode {
+	u, err := url.Parse(macroURL)
+	if err != nil {
+		return InvalidURL
+	}
+
+	if !strings.HasSuffix(u.Hostname(), "githubusercontent.com") {
+		return URLHostnameNotSupported
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", macroURL, http.NoBody)
 
 	if err != nil {
-		isValid = false
-		errorMessage = "Invalid URL."
-
-		return
+		return InvalidURL
 	}
 
 	req.Header.Add("Range", "bytes=0-512")
@@ -100,78 +122,64 @@ func validateURL(url string) (isValid bool, errorMessage string) {
 	resp, err := client.Do(req)
 
 	if err != nil {
-		isValid = false
-		errorMessage = "Unable to process image from URL"
-
-		return
+		return InvalidURL
 	}
 
 	if getFileSize(resp) > 1024*1024*1.5 {
-		isValid = false
-		errorMessage = `Image exceeds 1.5Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`
-
-		return
+		return FileIsTooBig
 	}
 
 	body := make([]byte, 512)
 	_, err = resp.Body.Read(body)
 
 	if err != nil {
-		isValid = false
-		errorMessage = "Unable to process image from URL"
-
-		return
+		return InvalidURL
 	}
 
 	str := http.DetectContentType(body)
 
 	if _, ok := supportedTypes[str]; !ok {
-		isValid = false
-		errorMessage = "Unknown image format. Only jpeg, gif, png and bmp are supported"
-
-		return
+		return FileFormatNotSupported
 	}
 
-	return true, ""
+	return Success
 }
 
-func validateInput(r *http.Request, client *bigquery.Client) (isValid bool, errorMessage string, err error) {
+func validateInput(r *http.Request, client *bigquery.Client) (ErrorCode, error) {
 	if r.Form.Get("type") != mutateTypeAdd {
-		isValid = true
-		return
+		return Success, nil
 	}
 
 	name := r.Form.Get("name")
 	macroURL := r.Form.Get("url")
 
-	if strings.Contains(name, " ") {
-		isValid = false
-		errorMessage = "Name can't contain spaces"
-
-		return
+	if name == "" {
+		return EmptyName, nil
 	}
 
-	isValid, errorMessage = validateURL(macroURL)
+	if macroURL == "" {
+		return EmptyURL, nil
+	}
 
-	if !isValid {
-		return
+	if strings.Contains(name, " ") {
+		return NameContainsSpaces, nil
+	}
+
+	if errCode := validateURL(macroURL); errCode != Success {
+		return errCode, nil
 	}
 
 	isExist, err := isMacroExist(name, client)
 
 	if err != nil {
-		err = fmt.Errorf("error checking if macro exist: %v", err)
-
-		return
+		return TransientError, fmt.Errorf("error checking if macro exist: %v", err)
 	}
 
 	if isExist {
-		errorMessage = fmt.Sprintf("The name '%s' already exist", name)
+		return NameAlreadyExist, nil
 	}
 
-	isValid = !isExist
-
-	return isValid, errorMessage, nil
+	return Success, nil
 }
 
 func getMutationQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error) {
@@ -223,13 +231,9 @@ func getMutationQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query
 	return query, nil
 }
 
-func getResponse(errorMessage string) (string, error) {
+func getResponse(errCode ErrorCode) (string, error) {
 	responseMap := map[string]interface{}{
-		"success": errorMessage == "",
-	}
-
-	if errorMessage != "" {
-		responseMap["error_message"] = errorMessage
+		"code": errCode,
 	}
 
 	response, err := json.Marshal(responseMap)
@@ -274,9 +278,7 @@ func revalidateMacro(name string, client *bigquery.Client) error {
 		return nil
 	}
 
-	isValid, _ := validateURL(row.URL)
-
-	if isValid {
+	if errCode := validateURL(row.URL); errCode == Success {
 		query = client.Query("UPDATE `github-macros.macros.macros` SET reports = 0 WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
@@ -317,14 +319,14 @@ func execMutate(r *http.Request) (string, error) {
 	}
 	defer client.Close()
 
-	isValid, errorMessage, err := validateInput(r, client)
+	errCode, err := validateInput(r, client)
 
 	if err != nil {
 		return "", fmt.Errorf("error checking if input is valid: %v", err)
 	}
 
-	if !isValid {
-		return getResponse(errorMessage)
+	if errCode != Success {
+		return getResponse(errCode)
 	}
 
 	query, err := getMutationQuery(r, client)
@@ -346,7 +348,7 @@ func execMutate(r *http.Request) (string, error) {
 		}
 	}
 
-	return getResponse("")
+	return getResponse(Success)
 }
 
 func Mutate(w http.ResponseWriter, r *http.Request) {

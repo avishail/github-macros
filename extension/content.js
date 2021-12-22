@@ -7,7 +7,28 @@
     3. settings - configure more sites and set the action keys
     4. fetch and show small footer from the server? Ask Sivan
     5. test load more
+
+    6. Move to error codes from the server, interperate them here
+    7. Add support for thumbnail + gifs thumbnails (add thumbnail, is_gif and gif_thumbnail)
+        - We wanna show a small thumbnail instead of the real image
+        - We wanna show a thumbnail with gif icon on top of it. When the user hovers
+          We replace it with reduced gif
 */
+
+class ErrorCodes {
+    static Success = 0
+    static EmptyName = 1
+	static NameContainsSpaces = 2
+	static NameAlreadyExist = 3
+	static EmptyURL = 4
+	static InvalidURL = 5
+	static URLHostnameNotSupported = 6
+	static FileIsTooBig = 7
+	static FileFormatNotSupported = 8
+    static TransientError = 9
+}
+
+Object.freeze(ErrorCodes); 
 
 const numberOfTopUsagesToDisplay = 20;
 const maxTopUsagesToStore = 100;
@@ -342,10 +363,10 @@ createTooltip = function(targetId, target) {
                             <div id="${idPrefix}addNewMacroButton" style="display: flex; border-radius: 4px; margin: 15px 15px 15px 15px; background-color: #FFFFFF; justify-content: center;">
                                 <text style="font-family: 'Pragati Narrow'; font-weight: 700; font-size: 12px; color: black; user-select: none; margin: 4px;">Add to the pile</text>
                             </div>
-                            <div style="display: flex; flex-grow: 1; flex-direction: column; margin: 0px 15px 15px 15px; justify-content: center;">
+                            <div style="display: flex; flex-grow: 1; flex-direction: column; margin: 0px 15px 15px 15px;">
                                 <div id="${idPrefix}addNewMacroSpinner" class="gh-macros-light-loader gh-macros-loader" style="display: none; font-size: 2px;"></div>
                                 <div id="${idPrefix}addNewMacroError" style="display: none; flex-direction: column; align-items: center; text-align: center;">
-                                    <img src="${errorXSrc}" style="width: 16px; height: 16px"/>
+                                    <img src="${errorXSrc}" style="width: 12px; height: 12px"/>
                                     <div id="${idPrefix}addNewMacroErrorMessage" class="gh-macros-add-new-error-message">
                                     </div>
                                 </div>
@@ -407,15 +428,44 @@ initMacrosScrollLogic = function(targetId) {
     );
 
     var loadingMore = false;
+    const searchInput = getElement(targetId, 'macroSearchInput');
+
     macrosSection.addEventListener('scroll', function(e) {
         if (loadingMore) {
             return
         }
 
-        loadingMore = true;
+        searchText = searchInput.text || '';
+
+        if (!(cachedContent.has(searchText))) {
+            return
+        }
+
+        content = cachedContent.get(searchText)
+
+        if (!(content['has_more'])) {
+            return
+        }
 
         if (macrosSection.offsetHeight + macrosSection.scrollTop > macrosSection.scrollHeight - loadMorePixelsBeforeScrollEnd) {
-            fetchNextPage(targetId, () => { loadingMore = false; })
+            loadingMore = true;
+            fetchContent(
+                targetId,
+                searchText,
+                content['next_page'],
+                (data) => { 
+                    loadingMore = false;
+                    updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
+                    ongoingRequests.delete(searchText);
+                    // check if in the mean time, the user changed the input
+                    if (searchText !== searchInput.value) {
+                        return;
+                    }
+
+                    updateUIWithContent(targetId, content, true);
+                },
+                () => { loadingMore = false; },
+            )
         }
       });
 }
@@ -453,10 +503,33 @@ initAddNewMacroLogic = function(targetId) {
     
 }
 
-addNewMacroShowErrorMessage = function(targetId, errorHTML) {
+errCodeToHTML = function(targetId, errCode) {
+    switch (errCode) {
+        case ErrorCodes.EmptyName:
+            return "Name is empty";
+        case ErrorCodes.NameContainsSpaces:
+            return "Name can't contains spaces";
+        case ErrorCodes.NameAlreadyExist:
+            return "Name is already taken";
+        case ErrorCodes.EmptyURL:
+            return "URL is empy"
+        case ErrorCodes.InvalidURL:
+            return "URL is not valid"
+        case ErrorCodes.URLHostnameNotSupported:
+            return "Only Github URLs are allowed. Drop the image into the comment box and get its URL from the Preview tab"
+        case ErrorCodes.FileIsTooBig:
+            return `Image exceeds 1.5Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`
+        case ErrorCodes.FileFormatNotSupported:
+            return "File format is not supported"
+        case ErrorCodes.TransientError:
+            return "Something went wrong, please try again"
+    }
+}
+
+addNewMacroShowErrorMessage = function(targetId, errCode) {
     getElement(targetId, 'addNewMacroSpinner').style.display = 'none';
     getElement(targetId, 'addNewMacroError').style.display = 'flex';
-    getElement(targetId, 'addNewMacroErrorMessage').innerHTML = errorHTML;
+    getElement(targetId, 'addNewMacroErrorMessage').innerHTML = errCodeToHTML(targetId, errCode);
 }
 
 addNewMacroShowSuccessMessage = function(targetId) {
@@ -466,41 +539,30 @@ addNewMacroShowSuccessMessage = function(targetId) {
 
 validateInput = function(macroName, macroURL) {
     if (macroName === '') {
-        return {
-            'is_valid': false,
-            'error': 'Name is empty',
-        }
+        return ErrorCodes.EmptyName
     }
 
     if (macroName.includes(' ')) {
-        return {
-            'is_valid': false,
-            'error': 'Name can\'t contain spaces',
-        }  
+        return ErrorCodes.NameContainsSpaces
     }
 
     if (macroURL === '') {
-        return {
-            'is_valid': false,
-            'error': 'URL is empty',
-        } 
+        return ErrorCodes.EmptyURL
     }
 
     try {
-        new URL(macroURL);
+        url = new URL(macroURL);
+        if (!url.hostname.endsWith('githubusercontent.com')) {
+            return ErrorCodes.URLHostnameNotSupported
+        }
     } catch {
-        return {
-            'is_valid': false,
-            'error': 'URL is not valid',
-        } 
+        return ErrorCodes.InvalidURL
     }
 
-    return {
-        'is_valid': true,
-    }
+    return ErrorCodes.Success
 }
 
-const addingNewMacro = false
+var addingNewMacro = false
 
 addNewMacro = function(targetId) {
     if (addingNewMacro) {
@@ -519,12 +581,12 @@ addNewMacro = function(targetId) {
     const macroName = getElement(targetId, 'newMacroName').value;
     const macroURL = getElement(targetId, 'newMacroURL').value;
 
-    is_valid_res = validateInput(macroName, macroURL)
+    // errCode = validateInput(macroName, macroURL)
 
-    if (!is_valid_res['is_valid']) {
-        addNewMacroShowErrorMessage(targetId, is_valid_res['error']);
-        return
-    }
+    // if (errCode != ErrorCodes.Success) {
+    //     addNewMacroShowErrorMessage(targetId, errCode);
+    //     return
+    // }
 
     addingNewMacro = true;
 
@@ -535,8 +597,8 @@ addNewMacro = function(targetId) {
             { type: "add", name: macroName, url: macroURL },
             (responseText) => {
                 const response = JSON.parse(responseText);
-                if (!(response['success'])) {
-                    addNewMacroShowErrorMessage(targetId, response["error_message"] || "Unable to process the request. Check the URL and try again"); 
+                if (response['code'] != ErrorCodes.Success) {
+                    addNewMacroShowErrorMessage(targetId, response['code']); 
                     return
                 }
 
@@ -553,13 +615,13 @@ addNewMacro = function(targetId) {
             },
         ).fail(
             () => {
-                addNewMacroShowErrorMessage(targetId, "Unable to process the request. Check the URL and try again"); 
+                addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
             },
         ).always(() => {addingNewMacro = false;});
         
     }
     img.onerror = () => {
-        addNewMacroShowErrorMessage(targetId, "Unable to load the image. Please drop the image into the comment box and use the URL");
+        addNewMacroShowErrorMessage(targetId, ErrorCodes.InvalidURL);
         addingNewMacro = false;
     }
     img.src = macroURL;
