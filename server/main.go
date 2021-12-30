@@ -55,6 +55,16 @@ func testSuggestionQuery() {
 	p.Query(&ResponseWriter{}, r)
 }
 
+func testPreprocessing() {
+	r := &http.Request{
+		URL: &url.URL{
+			RawQuery: "name=blablabla&url=https://media3.giphy.com/media/5nsiFjdgylfK3csZ5T/giphy.gif?cid=ecf05e47wg5njrg4w3b1ck0art5oid73791ezphqyeue752f&rid=giphy.gif&ct=g",
+			//RawQuery: "name=blablabla&url=https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/BB61_USS_Iowa_BB61_broadside_USN.jpg/1280px-BB61_USS_Iowa_BB61_broadside_USN.jpg",
+		},
+	}
+	p.Preprocess(&ResponseWriter{}, r)
+}
+
 func testAddMutation() {
 	r := &http.Request{
 		Method: http.MethodPost,
@@ -109,11 +119,13 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
+	testPreprocessing()
+
 	// testSearchQuery()
 	// testGetQuery()
 	// testSuggestionQuery()
 
 	// testAddMutation()
 	// testUseMutation()
-	testReportMutation()
+	//testReportMutation()
 }

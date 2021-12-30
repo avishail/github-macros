@@ -15,8 +15,11 @@ import (
 )
 
 type row struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name            string `json:"name"`
+	URL             string `json:"url"`
+	ThumbnailURL    string `json:"thumbnail"`
+	IsGif           bool   `json:"is_gif"`
+	GifThumbnailURL string `json:"gif_thumbnail"`
 }
 
 const queryTypeSearch = "search"
@@ -40,7 +43,7 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 	case queryTypeSearch:
 		log.Printf("search: %s, offset: %v", queryText, offset)
 		query = client.Query(
-			"SELECT name, url FROM `github-macros.macros.macros` WHERE name LIKE @name ORDER BY usages, name DESC LIMIT @limit OFFSET @offset",
+			"SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` WHERE name LIKE @name ORDER BY usages, name DESC LIMIT @limit OFFSET @offset",
 		)
 		query.Parameters = []bigquery.QueryParameter{
 			{
@@ -58,7 +61,7 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		}
 	case queryTypeGet:
 		log.Printf("get: %s", queryText)
-		query = client.Query("SELECT * FROM `github-macros.macros.macros` WHERE name IN UNNEST(@list)")
+		query = client.Query("SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` WHERE name IN UNNEST(@list)")
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "list",
@@ -67,7 +70,7 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		}
 	case "", queryTypeSuggestion:
 		log.Printf("suggestion: offset: %v", offset)
-		query = client.Query("SELECT * FROM `github-macros.macros.macros` ORDER BY usages, name DESC LIMIT @limit OFFSET @offset")
+		query = client.Query("SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` ORDER BY usages, name DESC LIMIT @limit OFFSET @offset")
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "limit",

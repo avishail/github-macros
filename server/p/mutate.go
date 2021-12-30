@@ -3,32 +3,14 @@ package p
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
-	"google.golang.org/api/iterator"
 )
-
-const (
-	Success                 = 0
-	EmptyName               = 1
-	NameContainsSpaces      = 2
-	NameAlreadyExist        = 3
-	EmptyURL                = 4
-	InvalidURL              = 5
-	URLHostnameNotSupported = 6
-	FileIsTooBig            = 7
-	FileFormatNotSupported  = 8
-	TransientError          = 9
-)
-
-type ErrorCode int
 
 const mutateTypeAdd = "add"
 const mutateTypeUse = "use"
@@ -36,71 +18,8 @@ const mutateTypeReport = "report"
 
 const reportsThreshold = 10
 
-var supportedTypes = map[string]bool{
-	"image/gif":  true,
-	"image/png":  true,
-	"image/bmp":  true,
-	"image/jpeg": true,
-}
-
-func isMacroExist(name string, client *bigquery.Client) (bool, error) {
-	query := client.Query(
-		"SELECT 1 FROM `github-macros.macros.macros` WHERE name=@name",
-	)
-	query.Parameters = []bigquery.QueryParameter{
-		{
-			Name:  "name",
-			Value: name,
-		},
-	}
-
-	ctx := context.Background()
-
-	iter, err := runQuery(ctx, query)
-
-	if err != nil {
-		return false, fmt.Errorf("error executing runQuery: %v", err)
-	}
-
-	type Row struct{}
-
-	var r Row
-	err = iter.Next(&r)
-
-	if err != nil && err != iterator.Done {
-		return false, err
-	}
-
-	return iter.TotalRows > 0, nil
-}
-
-func getFileSize(r *http.Response) int64 {
-	if r.Header.Get("Content-Range") != "" {
-		parts := strings.Split(r.Header.Get("Content-Range"), "/")
-		if len(parts) == 2 {
-			size, err := strconv.ParseInt(parts[1], 10, 64)
-			if err == nil {
-				return size
-			}
-		}
-	}
-
-	if r.Header.Get("Content-Length") != "" {
-		size, err := strconv.ParseInt(r.Header.Get("Content-Length"), 10, 64)
-		if err == nil {
-			if size > r.ContentLength {
-				return size
-			}
-
-			return r.ContentLength
-		}
-	}
-
-	return r.ContentLength
-}
-
-func validateURL(macroURL string) ErrorCode {
-	u, err := url.Parse(macroURL)
+func validateGithubURL(urlToCheck string) ErrorCode {
+	u, err := url.Parse(urlToCheck)
 	if err != nil {
 		return InvalidURL
 	}
@@ -109,140 +28,101 @@ func validateURL(macroURL string) ErrorCode {
 		return URLHostnameNotSupported
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", macroURL, http.NoBody)
+	return Success
+}
 
-	if err != nil {
-		return InvalidURL
+func validateURL(macroURL string, maxSize int64) ErrorCode {
+	if errCode := validateGithubURL(macroURL); errCode != Success {
+		return errCode
 	}
 
-	req.Header.Add("Range", "bytes=0-512")
+	fileSize, fileType, errCode := getFileSizeAndType(macroURL)
 
-	var client http.Client
-
-	resp, err := client.Do(req)
-
-	if err != nil {
-		return InvalidURL
+	if errCode != Success {
+		return errCode
 	}
 
-	if getFileSize(resp) > 1024*1024*1.5 {
+	if fileSize > maxSize {
 		return FileIsTooBig
 	}
 
-	body := make([]byte, 512)
-	_, err = resp.Body.Read(body)
-
-	if err != nil {
-		return InvalidURL
-	}
-
-	str := http.DetectContentType(body)
-
-	if _, ok := supportedTypes[str]; !ok {
+	if _, ok := supportedTypes[fileType]; !ok {
 		return FileFormatNotSupported
 	}
 
 	return Success
 }
 
-func validateInput(r *http.Request, client *bigquery.Client) (ErrorCode, error) {
-	if r.Form.Get("type") != mutateTypeAdd {
-		return Success, nil
-	}
-
-	name := r.Form.Get("name")
-	macroURL := r.Form.Get("url")
-
-	if name == "" {
-		return EmptyName, nil
-	}
-
-	if macroURL == "" {
-		return EmptyURL, nil
-	}
-
-	if strings.Contains(name, " ") {
-		return NameContainsSpaces, nil
-	}
-
-	if errCode := validateURL(macroURL); errCode != Success {
-		return errCode, nil
-	}
-
-	isExist, err := isMacroExist(name, client)
-
-	if err != nil {
-		return TransientError, fmt.Errorf("error checking if macro exist: %v", err)
-	}
-
-	if isExist {
-		return NameAlreadyExist, nil
-	}
-
-	return Success, nil
-}
-
-func getMutationQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error) {
+func getMutationQuery(
+	client *bigquery.Client,
+	mutationType,
+	macroName,
+	macroURL,
+	macroThumbnailURL string,
+	isMacroGif bool,
+	macroGifThumbnailURL string,
+) (*bigquery.Query, error) {
 	var query *bigquery.Query
 
-	name := r.Form.Get("name")
-
-	switch r.Form.Get("type") {
+	switch mutationType {
 	case mutateTypeAdd:
-		macroURL := r.Form.Get("url")
-
-		log.Printf("add: name=%s, URL: %v", name, macroURL)
+		log.Printf(
+			"add: name=%s, url: %s, thumbnail: %s, isGif: %t, gifThumbnail: %s",
+			macroName,
+			macroURL,
+			macroThumbnailURL,
+			isMacroGif,
+			macroGifThumbnailURL,
+		)
 
 		query = client.Query(
-			"INSERT  INTO `github-macros.macros.macros` (name, url, usages, reports) VALUES (@name, @url, 0, 0)",
+			"INSERT  INTO `github-macros.macros.macros` (name, url, usages, reports, thumbnail, is_gif, gif_thumbnail) VALUES (@name, @url, 0, 0, @thumbnail, @is_gif, @gif_thumbnail)",
 		)
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "name",
-				Value: name,
+				Value: macroName,
 			},
 			{
 				Name:  "url",
 				Value: macroURL,
 			},
+			{
+				Name:  "thumbnail",
+				Value: macroThumbnailURL,
+			},
+			{
+				Name:  "is_gif",
+				Value: isMacroGif,
+			},
+			{
+				Name:  "gif_thumbnail",
+				Value: macroGifThumbnailURL,
+			},
 		}
 	case mutateTypeUse:
-		log.Printf("update usages of: %s", name)
+		log.Printf("update usages of: %s", macroName)
 		query = client.Query("UPDATE `github-macros.macros.macros` SET usages = usages + 1 WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "name",
-				Value: name,
+				Value: macroName,
 			},
 		}
 	case mutateTypeReport:
-		log.Printf("update reports of: %s", name)
+		log.Printf("update reports of: %s", macroName)
 		query = client.Query("UPDATE `github-macros.macros.macros` SET reports = reports + 1 WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "name",
-				Value: name,
+				Value: macroName,
 			},
 		}
 	default:
-		return nil, fmt.Errorf("error: unknown mutation type '%s'", r.URL.Query().Get("type"))
+		return nil, fmt.Errorf("error: unknown mutation type '%s'", mutationType)
 	}
 
 	return query, nil
-}
-
-func getResponse(errCode ErrorCode) (string, error) {
-	responseMap := map[string]interface{}{
-		"code": errCode,
-	}
-
-	response, err := json.Marshal(responseMap)
-
-	if err != nil {
-		return "", fmt.Errorf("error while marshaling response: %v", err)
-	}
-
-	return string(response), nil
 }
 
 func revalidateMacro(name string, client *bigquery.Client) error {
@@ -278,7 +158,7 @@ func revalidateMacro(name string, client *bigquery.Client) error {
 		return nil
 	}
 
-	if errCode := validateURL(row.URL); errCode == Success {
+	if errCode := validateURL(row.URL, 1024*1024*10); errCode == Success {
 		query = client.Query("UPDATE `github-macros.macros.macros` SET reports = 0 WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
@@ -307,57 +187,90 @@ func revalidateMacro(name string, client *bigquery.Client) error {
 	return nil
 }
 
-func execMutate(r *http.Request) (string, error) {
+func execMutate(r *http.Request) (ErrorCode, error) {
 	if err := r.ParseForm(); err != nil {
-		return "", fmt.Errorf("error while parsing form: %v", err)
+		return TransientError, fmt.Errorf("error while parsing form: %v", err)
 	}
 	ctx := context.Background()
 	client, err := bigquery.NewClient(ctx, "github-macros")
 
 	if err != nil {
-		return "", fmt.Errorf("error while running bigquery.NewClient: %v", err)
+		return TransientError, fmt.Errorf("error while running bigquery.NewClient: %v", err)
 	}
 	defer client.Close()
 
-	errCode, err := validateInput(r, client)
+	macroName := r.Form.Get("name")
+	macroURL := r.Form.Get("url")
+	macroThumbnailURL := r.Form.Get("thumbnail")
+	isMacroGif := r.Form.Get("is_gif") == "true"
+	macroGifThumbnailURL := r.Form.Get("gif_thumbnail")
 
-	if err != nil {
-		return "", fmt.Errorf("error checking if input is valid: %v", err)
+	mutationType := r.Form.Get("type")
+
+	if mutationType == mutateTypeAdd {
+		if errCode := validateGithubURL(macroURL); errCode != Success {
+			return errCode, nil
+		}
+		errCode, validationErr := validateNameAndURL(macroName, macroURL, client)
+		if validationErr != nil {
+			return TransientError, fmt.Errorf("error checking if input is valid: %v", validationErr)
+		}
+
+		if errCode != Success {
+			return errCode, nil
+		}
+
+		if errCode := validateURL(macroThumbnailURL, cThumbnailMaxSize); errCode != Success {
+			macroThumbnailURL = ""
+		}
+
+		if errCode := validateURL(macroGifThumbnailURL, cGifThumbnailMaxSize); errCode != Success {
+			macroGifThumbnailURL = ""
+		}
 	}
 
-	if errCode != Success {
-		return getResponse(errCode)
-	}
-
-	query, err := getMutationQuery(r, client)
+	query, err := getMutationQuery(
+		client,
+		mutationType,
+		macroName,
+		macroURL,
+		macroThumbnailURL,
+		isMacroGif,
+		macroGifThumbnailURL,
+	)
 
 	if err != nil {
-		return "", err
+		return TransientError, err
 	}
 
 	_, err = runQuery(ctx, query)
 
 	if err != nil {
-		return "", fmt.Errorf("error while running query: %v", err)
+		return TransientError, fmt.Errorf("error while running query: %v", err)
 	}
 
 	if r.Form.Get("type") == mutateTypeReport {
 		err = revalidateMacro(r.Form.Get("name"), client)
 		if err != nil {
-			return "", fmt.Errorf("error while revalidate macro: %v", err)
+			return TransientError, fmt.Errorf("error while revalidate macro: %v", err)
 		}
 	}
 
-	return getResponse(Success)
+	return Success, nil
 }
 
 func Mutate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Access-Control-Allow-Origin", "*")
 
-	response, err := execMutate(r)
+	errCode, err := execMutate(r)
 
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+	}
+
+	response, err := getErrorCodeResponse(errCode)
+	if err != nil {
+		log.Println(err)
 	}
 
 	_, err = fmt.Fprint(w, response)

@@ -43,6 +43,8 @@ const targetIdToTarget = new Map();
 const macroTopUsages = [];
 const nameToTopUsage = new Map();
 
+closeTooltipOnClickOutside = true;
+
 getElement = function(targetId, id) {
     return $('#' + targetId + '_' + id)[0]
 }
@@ -255,6 +257,7 @@ createTooltip = function(targetId, target) {
     const successVSrc = chrome.runtime.getURL('img/icons/v-4x.png');
     
     var fetchWasCalled = false;
+    var resizeObserver;
 
     return new jBox(
         'Tooltip',
@@ -263,7 +266,6 @@ createTooltip = function(targetId, target) {
             addClass: 'tooltipBorder',
             width: '300px',
             height: '400px',
-            closeOnClick: 'body',
             closeOnEsc: true,
             position: {
                 x: 'left',
@@ -305,13 +307,25 @@ createTooltip = function(targetId, target) {
                 )
             },
             onOpenComplete: function () {
+                const tooltipDiv = getElement(targetId, 'macroMainWindow').parentNode;
+                const macrosSection = getElement(targetId, 'macrosSection');
+                resizeObserver = new ResizeObserver(entries => {
+                    macrosSection.style.height = tooltipDiv.offsetHeight - 55 + "px";
+                });
+                resizeObserver.observe(tooltipDiv);
+                // since tooltip might be shorter, we need to let the macros section to have
+                // the rest of the tooltip's space
+                //getElement(targetId, 'macrosSection').style.height = getElement(targetId, 'macroMainWindow').parentNode.offsetHeight - 55 + "px";
                 getElement(targetId, 'macroSearchInput').focus();
             },
             onClose: function () {
+                if (resizeObserver) {
+                    resizeObserver.disconnect();
+                }
                 handleCloseTooltip(targetId);
             },
             content:`
-            <div style="width: 100%; height: 100%; position: absolute; top: 0px; left: 0px; right: 0px; bottom: 0px; overflow: hidden">
+            <div id="${idPrefix}macroMainWindow" style="width: 100%; height: 100%; position: absolute; top: 0px; left: 0px; right: 0px; bottom: 0px; overflow: hidden">
                 <div style="display: flex; flex-direction: row; height: 55px;">
                     <div style="display: flex; flex-direction: row; width: 100%; height: auto; margin: 10px; border-width: 1px; border-style: solid none solid solid; border-color: #234C87; border-radius: 18px; overflow: auto">
                         <div style="display: flex; margin-left: 10px; width: 15px; height: 15px; justify-content: center; align-items: center; height: 100%; ">
@@ -394,13 +408,61 @@ makeid = function(length) {
     return result;
 }
 
+findClosestButton = function(target, buttonText) {
+    const pathFromTargetToRoot = new Map();
+
+    var cur = target;
+    var dist = 0;
+    while (cur) {
+        pathFromTargetToRoot.set(cur, dist);
+        dist++;
+        cur = cur.parentNode;
+    }
+
+    var minDist = Number.MAX_SAFE_INTEGER;
+    var closestButton;
+    var commonAncestor;
+
+    $('button').each(function() {
+        if (this.innerText !== buttonText) {
+            return
+        }
+
+        var curDist = 0;
+        var curNode = this;
+
+        while (!pathFromTargetToRoot.has(curNode)) {
+            curDist++;
+            curNode = curNode.parentNode;
+        }
+
+        const totalDist = curDist + pathFromTargetToRoot.get(curNode);
+        if (totalDist < minDist) {
+            minDist = totalDist;
+            closestButton = this;
+            commonAncestor = curNode;
+        }
+      });
+
+      return  {
+          'button': closestButton,
+          'common_ancestor': commonAncestor,
+      }
+}
+
 createTooltipMeta = function(target) {
     const targetId = makeid(10)
     const tooltip = createTooltip(targetId, target);
 
+    writeButtonMetadata = findClosestButton(target, 'Write')
+    previewButtonMetadata = findClosestButton(target, 'Preview')
+
     const newTooltipMeta = {
-        'targetId': targetId,
+        'target_id': targetId,
         'tooltip': tooltip,
+        'write_button': writeButtonMetadata['button'],
+        'preview_button': previewButtonMetadata['button'],
+        'common_ancestor': previewButtonMetadata['common_ancestor'],
     };
 
     return newTooltipMeta
@@ -437,11 +499,11 @@ initMacrosScrollLogic = function(targetId) {
 
         searchText = searchInput.text || '';
 
-        if (!(cachedContent.has(searchText))) {
+        if (!(contentCache.has(searchText))) {
             return
         }
 
-        content = cachedContent.get(searchText)
+        content = contentCache.get(searchText)
 
         if (!(content['has_more'])) {
             return
@@ -470,6 +532,26 @@ initMacrosScrollLogic = function(targetId) {
       });
 }
 
+/*
+let addSelfDestructingEventListener = (element, eventType, callback) => {
+    let handler = () => {
+        callback();
+        element.removeEventListener(eventType, handler);
+    };
+    element.addEventListener(eventType, handler);
+};
+*/
+initCloseTooltipLogic = function(targetId) {
+    const mainMacroWindow = getElement(targetId, 'macroMainWindow')
+
+    document.addEventListener('click', (event) => {
+        const withinBoundaries = event.composedPath().includes(mainMacroWindow)
+        if (!withinBoundaries && closeTooltipOnClickOutside) {
+            tooltipsCache.get(targetIdToTarget.get(targetId))['tooltip'].close();
+        } 
+    })
+}
+
 showAddMacroUI = function(targetId) {
     addNewMacroUI = getElement(targetId, 'addNewMacroWrapper')
     $(addNewMacroUI).animate({'height': '100%'});
@@ -493,7 +575,18 @@ initAddNewMacroLogic = function(targetId) {
     openMacroCreationButton = getElement(targetId, 'openMacroCreationButton');
     openMacroCreationButton.onmouseover = function() {openMacroCreationButton.style.background='#526683'};
     openMacroCreationButton.onmouseout = function() {openMacroCreationButton.style.background='#234C87'};
-    openMacroCreationButton.onclick = function() {showAddMacroUI(targetId)};
+    openMacroCreationButton.onclick = function() {
+        // $.ajax({
+        //     url: 'https://api.resmush.it/ws.php?img=https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg',
+        //     success: function(responseText) {
+        //         console.log(responseText);
+        //     },
+        //     fail: function() {
+        //         console.log("failed to send request");
+        //     }
+        // });
+        showAddMacroUI(targetId)
+    };
 
     // set up add new macro UI
     getElement(targetId, 'addNewMacroCloseMargins').onclick = () => {hideAddMacroUI(targetId);}
@@ -552,9 +645,6 @@ validateInput = function(macroName, macroURL) {
 
     try {
         url = new URL(macroURL);
-        if (!url.hostname.endsWith('githubusercontent.com')) {
-            return ErrorCodes.URLHostnameNotSupported
-        }
     } catch {
         return ErrorCodes.InvalidURL
     }
@@ -564,67 +654,74 @@ validateInput = function(macroName, macroURL) {
 
 var addingNewMacro = false
 
+// isGitHubMediaLink = function(macroURL) {
+//     try {
+//         url = new URL(macroURL);
+//         return url.hostname.endsWith('githubusercontent.com');
+//     } catch {
+//         return false;
+//     }
+// }
+
 addNewMacro = function(targetId) {
     if (addingNewMacro) {
         return
     }
 
-    // $.ajax({
-    //     url: 'https://api.resmush.it/ws.php?img=https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg',
-    //     success: function(responseText) {
-    //         console.log(responseText)
-    //     },
-    // });
     getElement(targetId, 'addNewMacroError').style.display = 'none';
     getElement(targetId, 'addNewMacroSpinner').style.display = 'inline';
 
     const macroName = getElement(targetId, 'newMacroName').value;
     const macroURL = getElement(targetId, 'newMacroURL').value;
 
-    // errCode = validateInput(macroName, macroURL)
+    errCode = validateInput(macroName, macroURL)
 
-    // if (errCode != ErrorCodes.Success) {
-    //     addNewMacroShowErrorMessage(targetId, errCode);
-    //     return
-    // }
+    if (errCode != ErrorCodes.Success) {
+        addNewMacroShowErrorMessage(targetId, errCode);
+        return
+    }
+
 
     addingNewMacro = true;
 
-    const img = document.createElement('img')
-    img.onload = () => {
-        $.post(
-            "https://us-central1-github-macros.cloudfunctions.net/mutate/",
-            { type: "add", name: macroName, url: macroURL },
-            (responseText) => {
-                const response = JSON.parse(responseText);
-                if (response['code'] != ErrorCodes.Success) {
-                    addNewMacroShowErrorMessage(targetId, response['code']); 
-                    return
-                }
+    $.ajax({
+        url: `https://us-central1-github-macros.cloudfunctions.net/preprocess/?name=${macroName}&url=${macroURL}`,
+        success: function(responseText) {
+            console.log(responseText)
+        },
+        error: function() {
+            addingNewMacro = false;
+            addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
+        }
+    });
 
-                addNewMacroShowSuccessMessage();
 
-                macroNameToUrl[macroName] = macroURL
-                contentCache.forEach(
-                    (key, value) => {
-                        if (macroName.includes(key)) {
-                            value['data'].unshift({'name': macroName, 'url': macroURL})
-                        }
-                    },
-                )
-            },
-        ).fail(
-            () => {
-                addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
-            },
-        ).always(() => {addingNewMacro = false;});
-        
-    }
-    img.onerror = () => {
-        addNewMacroShowErrorMessage(targetId, ErrorCodes.InvalidURL);
-        addingNewMacro = false;
-    }
-    img.src = macroURL;
+
+
+    // if (isGitHubMediaLink(macroURL)) {
+    //     uploadNewMacro(targetId, macroName, macroURL, true);
+    // } else {
+    //     createGitHubLink(
+    //         targetId,
+    //         macroURL,
+    //         (githubMediaURL) => {
+    //             uploadNewMacro(targetId, macroName, githubMediaURL, false);
+    //         },
+    //         () => {
+    //             addingNewMacro = false;
+    //             addNewMacroShowErrorMessage(targetId, ErrorCodes.URLHostnameNotSupported);
+    //         },
+    //     )
+    // }
+
+    
+
+
+    
+
+    
+
+    
 
     /*
      * 1. inject the URL
@@ -651,9 +748,197 @@ addNewMacro = function(targetId) {
     
 }
 
+createGitHubLink = function(targetId, macroURL, successCallback, failureCallback) {
+    target = targetIdToTarget.get(targetId);
+    metadata = tooltipsCache.get(target)
+
+    if (!metadata['preview_button'] || !metadata['write_button']) {
+        failureCallback()
+        return;
+    }
+
+    targetText = target.value;
+    targetSelectionStart = target.selectionStart;
+
+    const macroToInject = getInjectedMacro('gh-macros-new-macro', macroURL);
+    const newValue = target.value.slice(0, target.selectionStart - 1) + macroToInject + target.value.slice(target.selectionStart);
+    target.value = newValue;
+
+    var observer;
+    var imageSearchInterval;
+
+    const callback = function(mutationsList, observer) {
+        const images = document.getElementsByTagName('img');
+        for (i=0; i<images.length; i++) {
+            const image = images[i];
+            if (image.alt === 'github-macros-gh-macros-new-macro') {
+                target.value = targetText;
+                target.selectionStart = targetSelectionStart;
+                target.selectionEnd = targetSelectionStart;
+                clearInterval(imageSearchInterval);
+                observer.disconnect();
+                successCallback(image.src)
+            }
+        }
+    }
+
+    observer = new MutationObserver(callback);
+
+    // Start observing the target node for configured mutations
+    observer.observe(document.body/*metadata['common_ancestor']*/, { attributes: true, childList: true, subtree: true });
+
+    setTimeout(
+        () => {
+            var times = 0
+            imageSearchInterval = setInterval(
+                () => {
+                    if (times > 10) {
+                        clearInterval(imageSearchInterval);
+                        target.value = targetText;
+                        target.selectionStart = targetSelectionStart;
+                        target.selectionEnd = targetSelectionStart;
+                        failureCallback();
+                        return;
+                    }
+
+                    closeTooltipOnClickOutside = false;
+                    metadata["preview_button"].click();
+                    metadata["write_button"].click();
+                    closeTooltipOnClickOutside = true;
+
+                    // const images = document.getElementsByTagName('img');
+                    // for (i=0; i<images.length; i++) {
+                    //     const image = images[i];
+                    //     if (image.alt === 'github-macros-gh-macros-new-macro') {
+                    //         target.value = targetText;
+                    //         target.selectionStart = targetSelectionStart;
+                    //         target.selectionEnd = targetSelectionStart;
+                    //         clearInterval(imageSearch);
+                    //         successCallback(image.src); 
+                    //         return;
+                    //     }
+                    //     console.log(image.alt)
+                    // }
+
+                    // $(metadata['common_ancestor']).children('img').each(function() {
+                    //     if (this.alt === 'github-macros-gh-macros-new-macro') {
+                    //         target.value = targetText;
+                    //         target.selectionStart = targetSelectionStart;
+                    //         target.selectionEnd = targetSelectionStart;
+                    //         clearInterval(imageSearch);
+                    //         successCallback(this.src); 
+                    //         return;
+                    //     }
+                    //     console.log(this.alt)
+                    // })
+
+                    times++;
+                },
+                200
+            )
+        },
+        1,
+    )
+
+    var triggerUIChange;
+
+    // const callback = function(mutationsList, observer) {
+    //     console.log(mutationsList)
+    //     $(metadata['common_ancestor']).children('img').each(function() {
+    //         console.log(this.alt)
+    //     })
+    // }
+
+    // const observer = new MutationObserver(callback);
+
+    // // Start observing the target node for configured mutations
+    // observer.observe(metadata['common_ancestor'], {attributes: true});
+
+    // var times = 0
+    // triggerUIChange = setInterval(
+    //     () => {
+    //         metadata["preview_button"].click()
+    //         metadata["write_button"].click()
+
+    //         // exit in case times > X
+    //     },
+    //     1000
+    // )
+
+    // Later, you can stop observing
+    //observer.disconnect();
+
+    // we need to get the write tab button as well
+    // we need to detect click outside ourselfs. Usually we will close
+    // but in this specific case, we shouldn't
+    // we need to click on Preview and then on Write back so the image
+    // will be placed.
+    // we need to repeat it several times since it might take
+    // some time for github to respond with the preview
+
+    // initHideWindow = function() {
+    //     const target = document.getElementById('macroMainWindow')
+
+    //     document.addEventListener('click', (event) => {
+    //         const withinBoundaries = event.composedPath().includes(target)
+
+    //         if (withinBoundaries) {
+    //             console.log('Click happened inside element')
+    //         } else {
+    //             console.log('Click happened **OUTSIDE** element')
+    //         } 
+    //     })
+    // }
+}
+
+uploadNewMacro = function(targetId, macroName, macroURL, revalidateURL) {
+    uploadNewMacroFunc = () => {
+        $.post(
+            "https://us-central1-github-macros.cloudfunctions.net/mutate/",
+            { type: "add", name: macroName, url: macroURL },
+            (responseText) => {
+                const response = JSON.parse(responseText);
+                if (response['code'] != ErrorCodes.Success) {
+                    addNewMacroShowErrorMessage(targetId, response['code']); 
+                    return
+                }
+
+                addNewMacroShowSuccessMessage(targetId);
+
+                macroNameToUrl[macroName] = macroURL
+                contentCache.forEach(
+                    (key, value) => {
+                        if (macroName.includes(key)) {
+                            value['data'].unshift({'name': macroName, 'url': macroURL})
+                        }
+                    },
+                )
+            },
+        ).fail(
+            () => {
+                addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
+            },
+        ).always(() => {addingNewMacro = false;});    
+    }
+
+    if (!revalidateURL) {
+        uploadNewMacroFunc();
+        return
+    }
+
+    const img = document.createElement('img')
+    img.onload = uploadNewMacroFunc;
+    img.onerror = () => {
+        addNewMacroShowErrorMessage(targetId, ErrorCodes.InvalidURL);
+        addingNewMacro = false;
+    }
+    img.src = macroURL;
+}
+
 initNewTooltip = function(targetId) {
     initSearchInput(targetId);
     initMacrosScrollLogic(targetId);
+    initCloseTooltipLogic(targetId);
     initAddNewMacroLogic(targetId);
 }
 
@@ -664,7 +949,7 @@ openTooltip = function(target) {
     } else {
         tooltipMeta = createTooltipMeta(target);
         tooltipsCache.set(target, tooltipMeta);
-        targetIdToTarget.set(tooltipMeta['targetId'], target);
+        targetIdToTarget.set(tooltipMeta['target_id'], target);
     }
     tooltipMeta["tooltip"].open()
 }    
