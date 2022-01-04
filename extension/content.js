@@ -30,9 +30,11 @@ class ErrorCodes {
 
 Object.freeze(ErrorCodes); 
 
+const gVersion = "1.0.0"
+
 const numberOfTopUsagesToDisplay = 20;
-const maxTopUsagesToStore = 100;
-const maxSuggestionsFreshnessDuration = 60 * 60 * 24;
+const maxTopUsagesToStore = 1;
+const maxSuggestionsFreshnessDuration = 60 * 60 * 24 * 1000;
 const macroNamePrefix = 'github-macros-';
 const loadMorePixelsBeforeScrollEnd = 200;
 const hostnameToPattern = new Map();
@@ -43,7 +45,27 @@ const targetIdToTarget = new Map();
 const macroTopUsages = [];
 const nameToTopUsage = new Map();
 
+const gGifIconSrc = chrome.runtime.getURL('img/icons/gif.png');
+const gMagGlassIconSrc = chrome.runtime.getURL('img/icons/mglass-4x.png');
+const gPlusIconSrc = chrome.runtime.getURL('img/icons/plus-4x.png');
+const gXIconSrc = chrome.runtime.getURL('img/icons/x-4x.png');
+const gVIconSrc = chrome.runtime.getURL('img/icons/v-4x.png');
+
 closeTooltipOnClickOutside = true;
+
+catchAndLog = function(f) {
+    return function() {
+        try {
+            return f.apply(this, arguments);
+        } catch (e) {
+            $.post( 
+                "https://us-central1-github-macros.cloudfunctions.net/client_error/",
+                { version: gVersion, error: e.stack},
+            );
+            console.log(e)
+        }
+    }
+}
 
 getElement = function(targetId, id) {
     return $('#' + targetId + '_' + id)[0]
@@ -148,8 +170,8 @@ selectMacro = function(targetId, macro) {
     setTimeout(() => {
         updateTopUsages(macro);
         $.post( 
-            "https://us-central1-github-macros.cloudfunctions.net/mutate/",
-            { type: "use", name: macro["name"] },
+            "https://us-central1-github-macros.cloudfunctions.net/usage/",
+            {name: macro["name"] },
         );
     }, 0);
 }
@@ -218,6 +240,64 @@ updateCacheWithNewContent = function(searchText, items, isRealPage, hasMore) {
     cachedContent['has_more'] = hasMore;
 }
 
+createSingleMacro = function(targetId, item) {
+    const div = document.createElement('div');
+    div.style.width = '100%';
+    div.style.marginTop = '5px';
+    div.style.marginBottom = '5px';
+    div.style.borderRadius = '5px';
+    div.style.position = 'relative';
+    div.onclick = function() {selectMacro(targetId, item);};
+
+    const image = document.createElement('img');
+    image.style.width = '100%';
+    image.src = item['thumbnail'] || item['gif_thumbnail'] || item['url'];
+    image.title = item['name'];
+    image.style.display = 'block';
+    image.onerror = function () {
+        div.parentElement.removeChild(div);
+        $.post( "https://us-central1-github-macros.cloudfunctions.net/report/", { name: item["name"] } );
+    };
+
+    div.appendChild(image)
+
+    const gifDiv = document.createElement('div');
+    const gifIcon = document.createElement('img');
+    if (item['is_gif'] && item['thumbnail']) {
+        gifDiv.style.position = 'absolute';
+        gifDiv.style.width = '100%';
+        gifDiv.style.height = '100%';
+        gifDiv.style.top = 0;
+        gifDiv.style.left = 0;
+        gifDiv.style.display = 'flex';
+        gifDiv.style.justifyContent = 'center';
+        gifDiv.style.alignItems = 'center';
+
+        gifIcon.src = gGifIconSrc;
+        gifIcon.style.width = '30px';
+        gifIcon.style.aspectRatio = '1.32';
+
+        gifDiv.appendChild(gifIcon);
+
+        div.appendChild(gifDiv)
+    }
+
+    if (item['is_gif'] && item['thumbnail']) {
+        gifDiv.onmouseenter = function() {
+            gifIcon.style.visibility = 'hidden';
+            image.src = item['gif_thumbnail'] || item['url'];
+
+        }
+
+        gifDiv.onmouseleave = function() {
+            gifIcon.style.visibility = 'visible';
+            image.src = item['thumbnail'];
+        }
+    }
+
+    return div
+}
+
 updateUIWithContent = function (targetId, content, isFirstPage) {
     leftMacroDiv = getElement(targetId, 'leftMacros');
     rightMacroDiv = getElement(targetId, 'rightMacros');
@@ -229,33 +309,17 @@ updateUIWithContent = function (targetId, content, isFirstPage) {
 
     getElement(targetId, 'moreResultsSpinner').style.display = content['has_more'] ? 'inline' : 'none';
 
-    let divs = [leftMacroDiv, rightMacroDiv];
+    let divs = rightMacroDiv.childElementCount >= leftMacroDiv.childElementCount 
+        ? [leftMacroDiv, rightMacroDiv] 
+        : [rightMacroDiv, leftMacroDiv];
     const items = content['data'];
     for (var i = 0; i < items.length; i++) {
-        const item = items[i];
-
-        const image = document.createElement('img');
-        image.style.width = '100%';
-        image.style.marginTop = '5px';
-        image.style.marginBottom = '5px';
-        image.style.borderRadius = '5px';
-        image.src = item['url'];
-        image.title = item['name'];
-        image.onclick = function() {selectMacro(targetId, item);};
-        image.onerror = function () {
-            $.post( "https://us-central1-github-macros.cloudfunctions.net/mutate/", { type: "report", name: item["name"] } );
-        };
-        divs[i % 2].appendChild(image);
+        divs[i % 2].appendChild(createSingleMacro(targetId, items[i]));
     }
 }
 
 createTooltip = function(targetId, target) {
     const idPrefix = targetId + '_';
-    const magGlassSrc = chrome.runtime.getURL('img/icons/mglass-4x.png');
-    const plusSrc = chrome.runtime.getURL('img/icons/plus-4x.png');
-    const errorXSrc = chrome.runtime.getURL('img/icons/x-4x.png');
-    const successVSrc = chrome.runtime.getURL('img/icons/v-4x.png');
-    
     var fetchWasCalled = false;
     var resizeObserver;
 
@@ -280,22 +344,43 @@ createTooltip = function(targetId, target) {
                 initNewTooltip(targetId);
             },
             onOpen: function () {
-                if (contentCache.has('')) {
-                    updateUIFromCache(targetId, '')
-                    return;
-                }
-
                 if (fetchWasCalled) {
                     return;
                 }
 
                 fetchWasCalled = true;
 
+                if (contentCache.has('')) {
+                    updateUIFromCache(targetId, '')
+
+                    // TODO remove this once we will have enough initial images
+                    // this will trigger a silent update in the background so next
+                    // time the user opens the tooltip, the new content will be there
+                    fetchContent(
+                        targetId,
+                        '',
+                        0,
+                        (content) => {
+                            fetchWasCalled = false;
+                            updateCacheWithNewContent('', content['data'], true, content['has_more']);
+                            updateUIWithContent(targetId, contentCache.get(''), true);
+                            chrome.storage.sync.set({
+                                'suggestions': JSON.stringify(content),
+                                'suggestions_freshness': Date.now().toString()
+                            });
+                        },
+                        () => { fetchWasCalled = false; },
+                    )
+
+                    return;
+                }
+
                 fetchContent(
                     targetId,
                     '',
                     0,
                     (content) => {
+                        fetchWasCalled = false;
                         updateCacheWithNewContent('', content['data'], true, content['has_more']);
                         updateUIWithContent(targetId, content, true);
                         chrome.storage.sync.set({
@@ -329,7 +414,7 @@ createTooltip = function(targetId, target) {
                 <div style="display: flex; flex-direction: row; height: 55px;">
                     <div style="display: flex; flex-direction: row; width: 100%; height: auto; margin: 10px; border-width: 1px; border-style: solid none solid solid; border-color: #234C87; border-radius: 18px; overflow: auto">
                         <div style="display: flex; margin-left: 10px; width: 15px; height: 15px; justify-content: center; align-items: center; height: 100%; ">
-                            <img id="${idPrefix}searchIcon" style="width: 15px; height: 15px;" src="${magGlassSrc}" />
+                            <img id="${idPrefix}searchIcon" style="width: 15px; height: 15px;" src="${gMagGlassIconSrc}" />
                             <div id="${idPrefix}searchSpinner" style="display: none;" class="gh-macros-loader gh-macros-dark-loader"></div>
                         </div>
                         <div style="display: flex; justify-content: center; align-items: center; height: 100%; flex-grow: 1;">
@@ -352,7 +437,7 @@ createTooltip = function(targetId, target) {
                     </div>
                 </div>
                 <div id="${idPrefix}openMacroCreationButton" class="gh-macros-box-shadow gh-macros-hoover-bg" style="z-index: 1; display: flex; justify-content: center; align-items: center; position: absolute; right: 16px; bottom: 16px; width: 30px; height: 30px; background-color: #234C87; border-radius: 15px;">
-                    <img style="width: 7px; height: 7px" src="${plusSrc}" />
+                    <img style="width: 7px; height: 7px" src="${gPlusIconSrc}" />
                 </div>
                 <div id="${idPrefix}addNewMacroWrapper" style="z-index: 2; display: flex; flex-direction: column; position: absolute; bottom: 0; left:0; right: 0; width: 100%; height: 0; align-items: end">
                     <div id="${idPrefix}addNewMacroCloseMargins" style="height: 150px; width: 100%"></div>
@@ -380,14 +465,14 @@ createTooltip = function(targetId, target) {
                             <div style="display: flex; flex-grow: 1; flex-direction: column; margin: 0px 15px 15px 15px;">
                                 <div id="${idPrefix}addNewMacroSpinner" class="gh-macros-light-loader gh-macros-loader" style="display: none; font-size: 2px;"></div>
                                 <div id="${idPrefix}addNewMacroError" style="display: none; flex-direction: column; align-items: center; text-align: center;">
-                                    <img src="${errorXSrc}" style="width: 12px; height: 12px"/>
+                                    <img src="${gXIconSrc}" style="width: 12px; height: 12px"/>
                                     <div id="${idPrefix}addNewMacroErrorMessage" class="gh-macros-add-new-error-message">
                                     </div>
                                 </div>
                             </div>
                         </div> 
                         <div id="${idPrefix}addNewMacroSuccess" style="display: none;flex-direction: column;width: 100%;height: 100%;align-items: center;justify-content: center;">
-                            <img src="${successVSrc}" style="width: 34px;height: 25px;">
+                            <img src="${gVIconSrc}" style="width: 34px;height: 25px;">
                             <text style="font-family: 'Pragati Narrow';font-weight: 400;font-size: 16px;color: white;user-select: none;margin: 20;text-align: center;">It was added succesfully to the pile and you can start using it! Thanks for contributing :)</text>
                         </div>   
                     </div>  
@@ -408,61 +493,13 @@ makeid = function(length) {
     return result;
 }
 
-findClosestButton = function(target, buttonText) {
-    const pathFromTargetToRoot = new Map();
-
-    var cur = target;
-    var dist = 0;
-    while (cur) {
-        pathFromTargetToRoot.set(cur, dist);
-        dist++;
-        cur = cur.parentNode;
-    }
-
-    var minDist = Number.MAX_SAFE_INTEGER;
-    var closestButton;
-    var commonAncestor;
-
-    $('button').each(function() {
-        if (this.innerText !== buttonText) {
-            return
-        }
-
-        var curDist = 0;
-        var curNode = this;
-
-        while (!pathFromTargetToRoot.has(curNode)) {
-            curDist++;
-            curNode = curNode.parentNode;
-        }
-
-        const totalDist = curDist + pathFromTargetToRoot.get(curNode);
-        if (totalDist < minDist) {
-            minDist = totalDist;
-            closestButton = this;
-            commonAncestor = curNode;
-        }
-      });
-
-      return  {
-          'button': closestButton,
-          'common_ancestor': commonAncestor,
-      }
-}
-
 createTooltipMeta = function(target) {
     const targetId = makeid(10)
     const tooltip = createTooltip(targetId, target);
 
-    writeButtonMetadata = findClosestButton(target, 'Write')
-    previewButtonMetadata = findClosestButton(target, 'Preview')
-
     const newTooltipMeta = {
         'target_id': targetId,
         'tooltip': tooltip,
-        'write_button': writeButtonMetadata['button'],
-        'preview_button': previewButtonMetadata['button'],
-        'common_ancestor': previewButtonMetadata['common_ancestor'],
     };
 
     return newTooltipMeta
@@ -518,7 +555,6 @@ initMacrosScrollLogic = function(targetId) {
                 (data) => { 
                     loadingMore = false;
                     updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
-                    ongoingRequests.delete(searchText);
                     // check if in the mean time, the user changed the input
                     if (searchText !== searchInput.value) {
                         return;
@@ -532,15 +568,6 @@ initMacrosScrollLogic = function(targetId) {
       });
 }
 
-/*
-let addSelfDestructingEventListener = (element, eventType, callback) => {
-    let handler = () => {
-        callback();
-        element.removeEventListener(eventType, handler);
-    };
-    element.addEventListener(eventType, handler);
-};
-*/
 initCloseTooltipLogic = function(targetId) {
     const mainMacroWindow = getElement(targetId, 'macroMainWindow')
 
@@ -576,15 +603,6 @@ initAddNewMacroLogic = function(targetId) {
     openMacroCreationButton.onmouseover = function() {openMacroCreationButton.style.background='#526683'};
     openMacroCreationButton.onmouseout = function() {openMacroCreationButton.style.background='#234C87'};
     openMacroCreationButton.onclick = function() {
-        // $.ajax({
-        //     url: 'https://api.resmush.it/ws.php?img=https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg',
-        //     success: function(responseText) {
-        //         console.log(responseText);
-        //     },
-        //     fail: function() {
-        //         console.log("failed to send request");
-        //     }
-        // });
         showAddMacroUI(targetId)
     };
 
@@ -611,11 +629,11 @@ errCodeToHTML = function(targetId, errCode) {
         case ErrorCodes.URLHostnameNotSupported:
             return "Only Github URLs are allowed. Drop the image into the comment box and get its URL from the Preview tab"
         case ErrorCodes.FileIsTooBig:
-            return `Image exceeds 1.5Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`
+            return `Image exceeds 10Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`
         case ErrorCodes.FileFormatNotSupported:
             return "File format is not supported"
         case ErrorCodes.TransientError:
-            return "Something went wrong, please try again"
+            return "Something went wrong, please try again later"
     }
 }
 
@@ -654,15 +672,6 @@ validateInput = function(macroName, macroURL) {
 
 var addingNewMacro = false
 
-// isGitHubMediaLink = function(macroURL) {
-//     try {
-//         url = new URL(macroURL);
-//         return url.hostname.endsWith('githubusercontent.com');
-//     } catch {
-//         return false;
-//     }
-// }
-
 addNewMacro = function(targetId) {
     if (addingNewMacro) {
         return
@@ -684,255 +693,40 @@ addNewMacro = function(targetId) {
 
     addingNewMacro = true;
 
-    $.ajax({
-        url: `https://us-central1-github-macros.cloudfunctions.net/preprocess/?name=${macroName}&url=${macroURL}`,
-        success: function(responseText) {
-            console.log(responseText)
+    $.post(
+        "https://us-central1-github-macros.cloudfunctions.net/add/",
+        { 
+            name: macroName,
+            url: macroURL,
         },
-        error: function() {
-            addingNewMacro = false;
-            addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
-        }
-    });
-
-
-
-
-    // if (isGitHubMediaLink(macroURL)) {
-    //     uploadNewMacro(targetId, macroName, macroURL, true);
-    // } else {
-    //     createGitHubLink(
-    //         targetId,
-    //         macroURL,
-    //         (githubMediaURL) => {
-    //             uploadNewMacro(targetId, macroName, githubMediaURL, false);
-    //         },
-    //         () => {
-    //             addingNewMacro = false;
-    //             addNewMacroShowErrorMessage(targetId, ErrorCodes.URLHostnameNotSupported);
-    //         },
-    //     )
-    // }
-
-    
-
-
-    
-
-    
-
-    
-
-    /*
-     * 1. inject the URL
-     * 2. trigger preview by sending this event to the Preview button:
-     *  we can query all buttons with Preview text in it and send this event to the button
-     *  const mouseoverEvent = new Event('mouseenter');
-     *  previewButton.dispatchEvent(mouseoverEvent);
-     * 3. search the dom for the new image
-     * 4. extract the URL
-     * 5. remove the injected URL + restore mouse cursor
-     * 6. In case of a failure, let the user know they will have to do it manually
-     */
-
-    /*
-     * proposal for supporting thumbnails
-     * after adding the initial image, load it in JS and, reduce its size and then
-     * use the same tecnique to create another github image. Same for Gifs where we want
-     * to have an image instead with icon of "gif" on top of it.
-     * https://stackoverflow.com/questions/42092640/javascript-how-to-reduce-image-to-specific-file-size
-     * 
-     * reduce size of images: https://jsfiddle.net/qnhmytk4/3/
-     * gid image extraction: https://jsfiddle.net/7gtLtkbw/
-     */
-    
-}
-
-createGitHubLink = function(targetId, macroURL, successCallback, failureCallback) {
-    target = targetIdToTarget.get(targetId);
-    metadata = tooltipsCache.get(target)
-
-    if (!metadata['preview_button'] || !metadata['write_button']) {
-        failureCallback()
-        return;
-    }
-
-    targetText = target.value;
-    targetSelectionStart = target.selectionStart;
-
-    const macroToInject = getInjectedMacro('gh-macros-new-macro', macroURL);
-    const newValue = target.value.slice(0, target.selectionStart - 1) + macroToInject + target.value.slice(target.selectionStart);
-    target.value = newValue;
-
-    var observer;
-    var imageSearchInterval;
-
-    const callback = function(mutationsList, observer) {
-        const images = document.getElementsByTagName('img');
-        for (i=0; i<images.length; i++) {
-            const image = images[i];
-            if (image.alt === 'github-macros-gh-macros-new-macro') {
-                target.value = targetText;
-                target.selectionStart = targetSelectionStart;
-                target.selectionEnd = targetSelectionStart;
-                clearInterval(imageSearchInterval);
-                observer.disconnect();
-                successCallback(image.src)
+        (responseText) => {
+            const response = JSON.parse(responseText);
+            if (response['code'] != ErrorCodes.Success) {
+                addNewMacroShowErrorMessage(targetId, response['code']); 
+                return
             }
-        }
-    }
 
-    observer = new MutationObserver(callback);
+            addNewMacroShowSuccessMessage(targetId);
 
-    // Start observing the target node for configured mutations
-    observer.observe(document.body/*metadata['common_ancestor']*/, { attributes: true, childList: true, subtree: true });
+            const newMacro = response['data'];
 
-    setTimeout(
-        () => {
-            var times = 0
-            imageSearchInterval = setInterval(
-                () => {
-                    if (times > 10) {
-                        clearInterval(imageSearchInterval);
-                        target.value = targetText;
-                        target.selectionStart = targetSelectionStart;
-                        target.selectionEnd = targetSelectionStart;
-                        failureCallback();
-                        return;
-                    }
+            macroNameToUrl.set(macroName, macroURL);
 
-                    closeTooltipOnClickOutside = false;
-                    metadata["preview_button"].click();
-                    metadata["write_button"].click();
-                    closeTooltipOnClickOutside = true;
-
-                    // const images = document.getElementsByTagName('img');
-                    // for (i=0; i<images.length; i++) {
-                    //     const image = images[i];
-                    //     if (image.alt === 'github-macros-gh-macros-new-macro') {
-                    //         target.value = targetText;
-                    //         target.selectionStart = targetSelectionStart;
-                    //         target.selectionEnd = targetSelectionStart;
-                    //         clearInterval(imageSearch);
-                    //         successCallback(image.src); 
-                    //         return;
-                    //     }
-                    //     console.log(image.alt)
-                    // }
-
-                    // $(metadata['common_ancestor']).children('img').each(function() {
-                    //     if (this.alt === 'github-macros-gh-macros-new-macro') {
-                    //         target.value = targetText;
-                    //         target.selectionStart = targetSelectionStart;
-                    //         target.selectionEnd = targetSelectionStart;
-                    //         clearInterval(imageSearch);
-                    //         successCallback(this.src); 
-                    //         return;
-                    //     }
-                    //     console.log(this.alt)
-                    // })
-
-                    times++;
-                },
-                200
+            getElement(targetId, 'macroSearchInput').value = "";
+            getElement(targetId, 'macrosSection').scrollTop = 0;
+            getElement(targetId, 'leftMacros').prepend(
+                createSingleMacro(
+                    targetId,
+                    newMacro,
+                ),
             )
+            
         },
-        1,
-    )
-
-    var triggerUIChange;
-
-    // const callback = function(mutationsList, observer) {
-    //     console.log(mutationsList)
-    //     $(metadata['common_ancestor']).children('img').each(function() {
-    //         console.log(this.alt)
-    //     })
-    // }
-
-    // const observer = new MutationObserver(callback);
-
-    // // Start observing the target node for configured mutations
-    // observer.observe(metadata['common_ancestor'], {attributes: true});
-
-    // var times = 0
-    // triggerUIChange = setInterval(
-    //     () => {
-    //         metadata["preview_button"].click()
-    //         metadata["write_button"].click()
-
-    //         // exit in case times > X
-    //     },
-    //     1000
-    // )
-
-    // Later, you can stop observing
-    //observer.disconnect();
-
-    // we need to get the write tab button as well
-    // we need to detect click outside ourselfs. Usually we will close
-    // but in this specific case, we shouldn't
-    // we need to click on Preview and then on Write back so the image
-    // will be placed.
-    // we need to repeat it several times since it might take
-    // some time for github to respond with the preview
-
-    // initHideWindow = function() {
-    //     const target = document.getElementById('macroMainWindow')
-
-    //     document.addEventListener('click', (event) => {
-    //         const withinBoundaries = event.composedPath().includes(target)
-
-    //         if (withinBoundaries) {
-    //             console.log('Click happened inside element')
-    //         } else {
-    //             console.log('Click happened **OUTSIDE** element')
-    //         } 
-    //     })
-    // }
-}
-
-uploadNewMacro = function(targetId, macroName, macroURL, revalidateURL) {
-    uploadNewMacroFunc = () => {
-        $.post(
-            "https://us-central1-github-macros.cloudfunctions.net/mutate/",
-            { type: "add", name: macroName, url: macroURL },
-            (responseText) => {
-                const response = JSON.parse(responseText);
-                if (response['code'] != ErrorCodes.Success) {
-                    addNewMacroShowErrorMessage(targetId, response['code']); 
-                    return
-                }
-
-                addNewMacroShowSuccessMessage(targetId);
-
-                macroNameToUrl[macroName] = macroURL
-                contentCache.forEach(
-                    (key, value) => {
-                        if (macroName.includes(key)) {
-                            value['data'].unshift({'name': macroName, 'url': macroURL})
-                        }
-                    },
-                )
-            },
-        ).fail(
-            () => {
-                addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
-            },
-        ).always(() => {addingNewMacro = false;});    
-    }
-
-    if (!revalidateURL) {
-        uploadNewMacroFunc();
-        return
-    }
-
-    const img = document.createElement('img')
-    img.onload = uploadNewMacroFunc;
-    img.onerror = () => {
-        addNewMacroShowErrorMessage(targetId, ErrorCodes.InvalidURL);
-        addingNewMacro = false;
-    }
-    img.src = macroURL;
+    ).fail(
+        () => {
+            addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
+        },
+    ).always(() => {addingNewMacro = false;});  
 }
 
 initNewTooltip = function(targetId) {
@@ -1063,7 +857,7 @@ updateTopUsages = function(macro) {
     if (nameToTopUsage.has(macroName)) {
         topUsage = nameToTopUsage.get(macroName);
         topUsage['usages'] = topUsage['usages'] + 1;
-        macroTopUsages.sort(macroTopUsages, (a,b) => {return a['usages'] > b['usages']});
+        macroTopUsages.sort((a,b) => {return a['usages'] > b['usages']});
     } else if (nameToTopUsage.size == maxTopUsagesToStore) {
         topUsageToRemove = macroTopUsages.pop();
         nameToTopUsage.delete(topUsageToRemove['name'])
@@ -1073,6 +867,9 @@ updateTopUsages = function(macro) {
         const newTopUsage = {
             'name': macroName,
             'url': macro['url'],
+            'thumbnail': macro['thumbnail'],
+            'is_gif': macro['is_gif'],
+            'gif_thumbnail': macro['gif_thumbnail'],
             'usages': 1,
         }
         macroTopUsages.push(newTopUsage);
@@ -1083,13 +880,17 @@ updateTopUsages = function(macro) {
 }
 
 loadSuggestionsFromStorage = function() {
-    chrome.storage.sync.get(['suggestions', 'suggestions_freshness'], function(items) {
+    chrome.storage.sync.get(['suggestions', 'suggestions_freshness', 'top_usages'], function(items) {
         if ('top_usages' in items) {
-            macroTopUsages = JSON.parse(items['top_usages'])
-            macroTopUsages.sort(macroTopUsages, (a,b) => {return a['usages'] > b['usages']})
-            for (var i = 0; i < macroTopUsages.length; i++) { 
-                const topUsage = macroTopUsages[i];
+            topUsages = JSON.parse(items['top_usages'])
+            for (var i = 0; i < topUsages.length; i++) { 
+                const topUsage = topUsages[i];
                 nameToTopUsage.set(topUsage['name'], topUsage);
+            }
+
+            macroTopUsages.length = 0;
+            for (const usage of topUsages) {
+                macroTopUsages.push(usage)
             }
 
             updateCacheWithNewContent('', macroTopUsages.slice(0, numberOfTopUsagesToDisplay), false, true)
@@ -1103,10 +904,9 @@ loadSuggestionsFromStorage = function() {
             return;
         }
 
-        if ('suggestions' in items) {
-            content = JSON.parse(items['suggestions'])
-            updateCacheWithNewContent('', content['data'], true, content['has_more']);
-        }
+        
+        content = JSON.parse(items['suggestions'])
+        updateCacheWithNewContent('', content['data'], true, true);
     });
 }
 

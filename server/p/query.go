@@ -8,19 +8,10 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
 )
-
-type row struct {
-	Name            string `json:"name"`
-	URL             string `json:"url"`
-	ThumbnailURL    string `json:"thumbnail"`
-	IsGif           bool   `json:"is_gif"`
-	GifThumbnailURL string `json:"gif_thumbnail"`
-}
 
 const queryTypeSearch = "search"
 const queryTypeGet = "get"
@@ -42,9 +33,16 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 	switch r.URL.Query().Get("type") {
 	case queryTypeSearch:
 		log.Printf("search: %s, offset: %v", queryText, offset)
-		query = client.Query(
-			"SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` WHERE name LIKE @name ORDER BY usages, name DESC LIMIT @limit OFFSET @offset",
-		)
+		query = client.Query(`
+			SELECT name, url, thumbnail, is_gif, gif_thumbnail 
+			FROM github-macros.macros.macros Macros
+			LEFT JOIN github-macros.macros.usages Usages
+			ON Macros.name = Usages.macro_name
+			WHERE name LIKE @name
+			ORDER BY Usages.usages, Macros.name DESC 
+			LIMIT @limit
+			OFFSET @offset
+		`)
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "name",
@@ -61,16 +59,24 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		}
 	case queryTypeGet:
 		log.Printf("get: %s", queryText)
-		query = client.Query("SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` WHERE name IN UNNEST(@list)")
+		query = client.Query("SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
-				Name:  "list",
-				Value: strings.Split(queryText, ","),
+				Name:  "name",
+				Value: queryText,
 			},
 		}
 	case "", queryTypeSuggestion:
 		log.Printf("suggestion: offset: %v", offset)
-		query = client.Query("SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` ORDER BY usages, name DESC LIMIT @limit OFFSET @offset")
+		query = client.Query(`
+			SELECT name, url, thumbnail, is_gif, gif_thumbnail 
+			FROM github-macros.macros.macros Macros
+			LEFT JOIN github-macros.macros.usages Usages
+			ON Macros.name = Usages.macro_name
+			ORDER BY Usages.usages, Macros.name DESC
+			LIMIT @limit
+			OFFSET @offset
+		`)
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "limit",
@@ -107,12 +113,12 @@ func execQuery(r *http.Request) (string, error) {
 		return "", fmt.Errorf("runQuery: %v", err)
 	}
 
-	rows := []row{}
+	rows := []MacroRow{}
 
 	isQueryGet := r.URL.Query().Get("type") == queryTypeGet
 
 	for {
-		var curRow row
+		var curRow MacroRow
 		err = iter.Next(&curRow)
 
 		if err == iterator.Done {

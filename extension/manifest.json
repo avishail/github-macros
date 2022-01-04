@@ -22,7 +22,7 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": [ "http://*/*", "https://*/*" ],
+      "matches": [ "https://github.com/*", "https://gist.github.com/*" ],
       "js": [
         "js/jquery-3.6.0.min.js",
         "js/jBox.all.min.js",
