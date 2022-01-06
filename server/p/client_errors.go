@@ -12,13 +12,13 @@ import (
 
 func saveLog(r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		log.Fatalf("error while parsing form: %v", err)
+		log.Panicf("error while parsing form: %v", err)
 	}
 	ctx := context.Background()
 	client, err := bigquery.NewClient(ctx, "github-macros")
 
 	if err != nil {
-		log.Fatalf("error while running bigquery.NewClient: %v", err)
+		log.Panicf("error while running bigquery.NewClient: %v", err)
 	}
 	defer client.Close()
 
@@ -26,23 +26,24 @@ func saveLog(r *http.Request) {
 	stacktrace := r.Form.Get("stacktrace")
 
 	if version == "" {
-		log.Fatal("missing version parameter")
+		log.Panic("missing version parameter")
 	}
 
 	if stacktrace == "" {
-		log.Fatal("missing stacktrace parameter")
+		log.Panic("missing stacktrace parameter")
 	}
 
-	query := client.Query(
-		"INSERT  INTO `github-macros.macros.client_errors` (version, error, time) VALUES (@version, @error, CURRENT_TIMESTAMP())",
-	)
+	query := client.Query(`
+		INSERT INTO github-macros.macros.client_errors (id, client_version, stacktrace, timestamp) 
+		VALUES (GENERATE_UUID(), @client_version, @stacktrace, CURRENT_TIMESTAMP())
+	`)
 	query.Parameters = []bigquery.QueryParameter{
 		{
-			Name:  "version",
+			Name:  "client_version",
 			Value: version,
 		},
 		{
-			Name:  "error",
+			Name:  "stacktrace",
 			Value: stacktrace,
 		},
 	}

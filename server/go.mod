@@ -11,6 +11,9 @@ require (
 )
 
 require (
+	cloud.google.com/go/functions v1.1.0
+	cloud.google.com/go/kms v1.1.0 // indirect
+	cloud.google.com/go/pubsub v1.3.1
 	github.com/PuerkitoBio/goquery v1.8.0
 	github.com/census-instrumentation/opencensus-proto v0.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect

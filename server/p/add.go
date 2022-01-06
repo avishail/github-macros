@@ -6,10 +6,22 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
 )
+
+var startTime = time.Now().Unix()
+var lastTimeStamp = time.Now().Unix()
+
+func markTimeStamp(msg string) {
+	now := time.Now().Unix()
+	log.Printf("[cur: %d, total: %d]: %s\n", now-lastTimeStamp, now-startTime, msg)
+	lastTimeStamp = now
+}
 
 var supportedTypes = map[string]bool{
 	"image/gif":  true,
@@ -34,14 +46,163 @@ func validateFileSizeAndType(fileSize int64, fileType string, maxSize int64) Err
 	return Success
 }
 
-func getMacroWithTheSameURL(client *bigquery.Client, macroURL string) (*MacroRow, error) {
+func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
+	ctx := context.Background()
+
+	client, err := bigquery.NewClient(ctx, "github-macros")
+	if err != nil {
+		log.Panicf("failed to get bigquery client: %v", err)
+	}
+
+	defer client.Close()
+
+	macroName := r.Form.Get("name")
+	macroURL := r.Form.Get("url")
+	macroOrigURL := r.Form.Get("orig_url")
+
+	errCode := validateNameAndURL(client, macroName, macroURL)
+
+	markTimeStamp("Basic name and URL validation")
+
+	if errCode != Success {
+		return nil, errCode
+	}
+
+	fileSize, fileType, errCode := getFileSizeAndType(macroURL)
+	if errCode != Success {
+		return nil, errCode
+	}
+
+	if errCode := validateFileSizeAndType(fileSize, fileType, cFileMaxSize); errCode != Success {
+		return nil, errCode
+	}
+
+	markTimeStamp("File size and type validation")
+
+	isGif := isGif(fileType)
+
+	if isGithubMedia(macroURL) {
+		insertNewMacro(client, macroName, macroURL, "", isGif, "", macroOrigURL, fileSize, 0, 0)
+
+		newMacro := &MacroRow{
+			Name: macroName,
+			URL:  macroURL,
+		}
+
+		err := publishNewMacroMessage(macroName)
+
+		if err == nil {
+			return newMacro, Success
+		}
+
+		log.Printf("publishNewMacroMessage failed. retrying: %v", err)
+
+		err = publishNewMacroMessage(macroName)
+
+		if err == nil {
+			return newMacro, Success
+		}
+
+		log.Printf("publishNewMacroMessage failed again. falling back to full flow: %v", err)
+	}
+
+	newMacro, success := postprocessNewMacro(client, macroName, macroURL, fileSize, isGif, true)
+	if !success {
+		log.Panic("failed to run postprocessNewMacro")
+	}
+
+	return newMacro, Success
+}
+
+func getFileSizeAndType(macroURL string) (fileSize int64, fileType string, errCode ErrorCode) {
+	req, err := http.NewRequestWithContext(context.Background(), "GET", macroURL, http.NoBody)
+
+	if err != nil {
+		return 0, "", InvalidURL
+	}
+
+	req.Header.Add("Range", "bytes=0-512")
+
+	var client http.Client
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return 0, "", InvalidURL
+	}
+
+	fileSize = getFileSize(resp)
+	if fileSize > cFileMaxSize {
+		return 0, "", FileIsTooBig
+	}
+
+	body := make([]byte, 512)
+	_, err = resp.Body.Read(body)
+
+	if err != nil {
+		return 0, "", InvalidURL
+	}
+
+	fileType = http.DetectContentType(body)
+
+	return fileSize, fileType, Success
+}
+
+func validateNameAndURL(client *bigquery.Client, macroName, macroURL string) ErrorCode {
+	if macroName == "" {
+		return EmptyName
+	}
+
+	if macroURL == "" {
+		return EmptyURL
+	}
+
+	if strings.Contains(macroName, " ") {
+		return NameContainsSpaces
+	}
+
+	isExist := isMacroExist(macroName, client)
+
+	if isExist {
+		return NameAlreadyExist
+	}
+
+	return Success
+}
+
+func getFileSize(r *http.Response) int64 {
+	if r.Header.Get("Content-Range") != "" {
+		parts := strings.Split(r.Header.Get("Content-Range"), "/")
+		if len(parts) == 2 {
+			size, err := strconv.ParseInt(parts[1], 10, 64)
+			if err == nil {
+				return size
+			}
+		}
+	}
+
+	if r.Header.Get("Content-Length") != "" {
+		size, err := strconv.ParseInt(r.Header.Get("Content-Length"), 10, 64)
+		if err == nil {
+			if size > r.ContentLength {
+				return size
+			}
+
+			return r.ContentLength
+		}
+	}
+
+	return r.ContentLength
+}
+
+func isMacroExist(name string, client *bigquery.Client) bool {
 	query := client.Query(
-		"SELECT 1 FROM `github-macros.macros.macros` WHERE orig_url=@orig_url",
+		"SELECT 1 FROM `github-macros.macros.macros` WHERE name=@name",
 	)
 	query.Parameters = []bigquery.QueryParameter{
 		{
-			Name:  "orig_url",
-			Value: macroURL,
+			Name:  "name",
+			Value: name,
 		},
 	}
 
@@ -50,257 +211,19 @@ func getMacroWithTheSameURL(client *bigquery.Client, macroURL string) (*MacroRow
 	iter, err := runQuery(ctx, query)
 
 	if err != nil {
-		return nil, fmt.Errorf("error executing runQuery: %v", err)
+		log.Panicf("failed to check if name already exist: %v", err)
 	}
 
-	var r MacroRow
+	type Row struct{}
+
+	var r Row
 	err = iter.Next(&r)
 
 	if err != nil && err != iterator.Done {
-		return nil, err
+		log.Panicf("failed to read query results: %v", err)
 	}
 
-	if err == iterator.Done {
-		return nil, nil
-	}
-
-	return &r, nil
-}
-
-func createNewUsagesEntry(client *bigquery.Client, macroName string) error {
-	query := client.Query(`
-		INSERT INTO github-macros.macros.usages (macro_name, usages)
-		SELECT '@macro_name', 0 FROM (SELECT 1) 
-		LEFT JOIN github-macros.macros.usages
-		ON macro_name = @macro_name
-		WHERE macro_name IS NULL
-	`)
-	query.Parameters = []bigquery.QueryParameter{
-		{
-			Name:  "macro_name",
-			Value: macroName,
-		},
-	}
-
-	_, err := runQuery(context.Background(), query)
-
-	return err
-}
-
-func createNewReportsEntry(client *bigquery.Client, macroName string) error {
-	query := client.Query(`
-		INSERT INTO github-macros.macros.reports (macro_name, reports)
-		SELECT '@macro_name', 0 FROM (SELECT 1) 
-		LEFT JOIN github-macros.macros.reports
-		ON macro_name = @macro_name
-		WHERE macro_name IS NULL
-	`)
-	query.Parameters = []bigquery.QueryParameter{
-		{
-			Name:  "macro_name",
-			Value: macroName,
-		},
-	}
-
-	_, err := runQuery(context.Background(), query)
-
-	return err
-}
-
-func insertNewMacro(
-	client *bigquery.Client,
-	macroName, macroURL, thumbnailURL string,
-	isGif bool,
-	gifThumbnailURL, origURL string,
-	macroSize,
-	thumbnailSize,
-	gifThumbnailSize int64,
-) error {
-	if err := createNewReportsEntry(client, macroName); err != nil {
-		return err
-	}
-
-	if err := createNewUsagesEntry(client, macroName); err != nil {
-		return err
-	}
-
-	query := client.Query(
-		"INSERT INTO `github-macros.macros.macros` (name, orig_url, url, url_size, thumbnail, thumbnail_size, is_gif, gif_thumbnail, gif_thumbnail_size, width, height) VALUES (@name, @orig_url, @url, @url_size, @thumbnail, @thumbnail_size, @is_gif, @gif_thumbnail, @gif_thumbnail_size, 0, 0)",
-	)
-	query.Parameters = []bigquery.QueryParameter{
-		{
-			Name:  "name",
-			Value: macroName,
-		},
-		{
-			Name:  "url",
-			Value: macroURL,
-		},
-		{
-			Name:  "orig_url",
-			Value: origURL,
-		},
-		{
-			Name:  "url_size",
-			Value: macroSize,
-		},
-		{
-			Name:  "thumbnail",
-			Value: thumbnailURL,
-		},
-		{
-			Name:  "thumbnail_size",
-			Value: thumbnailSize,
-		},
-		{
-			Name:  "is_gif",
-			Value: isGif,
-		},
-		{
-			Name:  "gif_thumbnail",
-			Value: gifThumbnailURL,
-		},
-		{
-			Name:  "gif_thumbnail_size",
-			Value: gifThumbnailSize,
-		},
-	}
-
-	if _, err := runQuery(context.Background(), query); err != nil {
-		return fmt.Errorf("failed to insert new macro: %v", err)
-	}
-
-	return nil
-}
-
-func duplicateExistingMacro(client *bigquery.Client, macroName string, macroToDuplicate *MacroRow) (*MacroRow, error) {
-	if err := insertNewMacro(
-		client,
-		macroName,
-		macroToDuplicate.URL,
-		macroToDuplicate.Thumbnail,
-		macroToDuplicate.IsGif,
-		macroToDuplicate.GifThumbnail,
-		macroToDuplicate.OrigURL,
-		macroToDuplicate.URLSize,
-		macroToDuplicate.ThumbnailSize,
-		macroToDuplicate.GifThumbnailSize,
-	); err != nil {
-		return nil, err
-	}
-
-	var newMacro = *macroToDuplicate
-	newMacro.Name = macroName
-
-	return &newMacro, nil
-}
-
-func executaAdd(r *http.Request) (*MacroRow, ErrorCode, error) {
-	ctx := context.Background()
-
-	client, err := bigquery.NewClient(ctx, "github-macros")
-	if err != nil {
-		return nil, InfraFailure, err
-	}
-	defer client.Close()
-
-	macroName := r.Form.Get("name")
-	macroURL := r.Form.Get("url")
-
-	errCode, err := validateNameAndURL(client, macroName, macroURL)
-
-	if errCode != Success || err != nil {
-		return nil, errCode, err
-	}
-
-	fileSize, fileType, err := getFileSizeAndType(macroURL)
-	if err != nil {
-		return nil, InvalidURL, err
-	}
-
-	if errCode := validateFileSizeAndType(fileSize, fileType, cFileMaxSize); errCode != Success {
-		return nil, errCode, nil
-	}
-
-	macroRow, err := getMacroWithTheSameURL(client, macroURL)
-	if err != nil {
-		log.Printf("error while fetching macro with the same URL: %v", err)
-	}
-
-	if macroRow != nil {
-		newMacro, dupMacroErr := duplicateExistingMacro(client, macroName, macroRow)
-		if dupMacroErr != nil {
-			return nil, InfraFailure, dupMacroErr
-		}
-
-		return newMacro, Success, nil
-	}
-
-	var (
-		thumbnail        string
-		gifThumbnail     string
-		thumbnailSize    int64
-		gifThumbnailSize int64
-	)
-
-	isGif := isGif(fileType)
-	if isGif {
-		thumbnail, thumbnailSize, gifThumbnail, gifThumbnailSize, err = processGif(macroURL, fileSize)
-	} else {
-		thumbnail, thumbnailSize, err = processImage(macroURL, fileSize)
-	}
-
-	if err != nil {
-		return nil, InfraFailure, err
-	}
-
-	urlsToConvert := []string{macroURL}
-
-	if thumbnail != "" {
-		urlsToConvert = append(urlsToConvert, thumbnail)
-	}
-
-	if gifThumbnail != "" {
-		urlsToConvert = append(urlsToConvert, gifThumbnail)
-	}
-
-	githubURLs, err := GetGithubImages(client, urlsToConvert)
-	if err != nil {
-		return nil, InfraFailure, err
-	}
-
-	finalMacroURL, ok := githubURLs[macroURL]
-	if !ok {
-		return nil, TransientError, fmt.Errorf("failed to locate github macro image")
-	}
-
-	finalThumbnailURL := githubURLs[thumbnail]
-	finalGifThumbnailURL := githubURLs[gifThumbnail]
-
-	if err := insertNewMacro(
-		client,
-		macroName,
-		finalMacroURL,
-		finalThumbnailURL,
-		isGif,
-		finalGifThumbnailURL,
-		macroURL,
-		fileSize,
-		thumbnailSize,
-		gifThumbnailSize,
-	); err != nil {
-		return nil, InfraFailure, err
-	}
-
-	newMacro := &MacroRow{
-		Name:         macroName,
-		URL:          finalMacroURL,
-		Thumbnail:    finalThumbnailURL,
-		IsGif:        isGif,
-		GifThumbnail: finalGifThumbnailURL,
-	}
-
-	return newMacro, Success, nil
+	return iter.TotalRows > 0
 }
 
 func Add(w http.ResponseWriter, r *http.Request) {
@@ -310,18 +233,14 @@ func Add(w http.ResponseWriter, r *http.Request) {
 		log.Panicf("error while parsing form: %v", err)
 	}
 
-	newMacro, errCode, err := executaAdd(r)
+	newMacro, errCode := executaAdd(r)
 
-	if errCode == InfraFailure {
-		log.Panic(err)
-	}
-
-	var response string
+	var (
+		response string
+		err      error
+	)
 
 	if errCode != Success {
-		if err != nil {
-			log.Println(err)
-		}
 		response, err = getErrorCodeResponse(errCode)
 	} else {
 		response, err = getRespons(
@@ -341,4 +260,6 @@ func Add(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Panicf("error writing response: %v", err)
 	}
+
+	markTimeStamp("Done")
 }

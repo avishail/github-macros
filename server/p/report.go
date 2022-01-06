@@ -1,5 +1,5 @@
 // Package p contains an HTTP Cloud Function.
-package p
+package p //nolint
 
 import (
 	"context"

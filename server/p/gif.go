@@ -1,7 +1,7 @@
 package p
 
 import (
-	"errors"
+	"fmt"
 	"image"
 	"image/draw"
 	"image/gif"
@@ -14,7 +14,7 @@ func getGifFirstFrame(reader io.Reader) (*image.RGBA, error) {
 	decodedGif, err := gif.DecodeAll(reader)
 
 	if err != nil {
-		return nil, err
+		return nil, NewPerError(fmt.Sprintf("gif.DecodeAll: %v", err))
 	}
 
 	imgWidth, imgHeight := getGifDimensions(decodedGif)
@@ -22,7 +22,7 @@ func getGifFirstFrame(reader io.Reader) (*image.RGBA, error) {
 	overpaintImage := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
 
 	if len(decodedGif.Image) == 0 {
-		return nil, errors.New("gif contains zero images")
+		return nil, NewPerError("gif contains zero images")
 	}
 
 	srcImg := decodedGif.Image[0]
@@ -61,7 +61,7 @@ func getGifDimensions(gifImage *gif.GIF) (x, y int) {
 }
 
 func resizeGif(reader io.Reader, writer io.Writer) error {
-	tx := func(m image.Image) image.Image {
+	tx := func(m image.Image) image.Image { //nolint
 		return resizeImage(m)
 	}
 

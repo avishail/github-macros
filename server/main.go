@@ -1,13 +1,14 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"cloud.google.com/go/bigquery"
 	"github.com/avishail/github-macros/server/p"
 	"github.com/joho/godotenv"
 )
@@ -71,7 +72,7 @@ func testAddMutation() {
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"name=wowdogreview&url=https://camo.githubusercontent.com/f5f1d2b3596786dc61ab150e45c2fa3f4f17e8db17e0037bf4840444edfaaa12/68747470733a2f2f7777772e7265736561726368676174652e6e65742f70726f66696c652f4b697273692d4b61757070696e656e2f7075626c69636174696f6e2f3330353838323537322f6669677572652f666967322f41533a33393138363539343237323436303940313437303433393532393131372f412d646f67652d6d656d652d61626f75742d6c696e67756973746963732e706e67",
+				"name=magic&url=https://c.tenor.com/wn2_Qq6flogAAAAM/magical-magic.gif",
 			),
 		),
 		Header: http.Header{
@@ -116,25 +117,51 @@ func testReportMutation() {
 }
 */
 
-func main() {
-	m := map[string]string{}
+func runQuery(ctx context.Context, query *bigquery.Query) (*bigquery.RowIterator, error) {
+	job, err := query.Run(ctx)
 
-	a := m["a"]
-	fmt.Println(a)
+	if err != nil {
+		return nil, err
+	}
+
+	status, err := job.Wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if status.Err() != nil {
+		return nil, status.Err()
+	}
+
+	iter, err := job.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return iter, nil
+}
+
+func main() {
+	// m := map[string]interface{}{}
+
+	// a, _ := m["a"].(float64)
+	// fmt.Println(a)
 
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
 
+	// p.PublishNewMacroMessage("macroName123")
+
 	//testPreprocessing()
 
 	//testSearchQuery()
 	//testGetQuery()
-	// testSuggestionQuery()
+	//testSuggestionQuery()
 
-	//testAddMutation()
-	testUsage()
+	testAddMutation()
+	//testUsage()
 	//testReportMutation()
 
 	// ctx := context.Background()
@@ -145,6 +172,22 @@ func main() {
 	// 	return
 	// }
 	// defer client.Close()
+
+	// query := client.Query(`
+	// 	INSERT INTO github-macros.macros.reports (macro_name, reports)
+	// 	SELECT @macro_name, 0 FROM (SELECT 1)
+	// 	LEFT JOIN github-macros.macros.reports
+	// 	ON macro_name = @macro_name
+	// 	WHERE macro_name IS NULL
+	// `)
+	// query.Parameters = []bigquery.QueryParameter{
+	// 	{
+	// 		Name:  "macro_name",
+	// 		Value: "cool_macro",
+	// 	},
+	// }
+
+	// fmt.Println(runQuery(ctx, query))
 
 	// githubImages, err := p.GetGithubImages(client, []string{"https://upload.wikimedia.org/wikipedia/commons/e/ea/BB61_USS_Iowa_BB61_broadside_USN.jpg", "https://www.researchgate.net/profile/Kirsi-Kauppinen/publication/305882572/figure/fig2/AS:391865942724609@1470439529117/A-doge-meme-about-linguistics.png"})
 

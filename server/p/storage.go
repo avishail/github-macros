@@ -3,6 +3,7 @@ package p
 import (
 	"context"
 	"io"
+	"log"
 
 	"cloud.google.com/go/storage"
 )
@@ -29,9 +30,13 @@ func (w *WriteCloserWithSize) GetTotalBytes() int64 {
 	return w.totalBytes
 }
 
-func newStorageClient() (*storage.Client, error) {
-	ctx := context.Background()
-	return storage.NewClient(ctx)
+func newStorageClient() *storage.Client {
+	client, err := storage.NewClient(context.Background())
+	if err != nil {
+		log.Panicf("storage.NewClient: %v", err)
+	}
+
+	return client
 }
 
 func closeStorageClient(client *storage.Client) error {

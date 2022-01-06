@@ -10,7 +10,6 @@ import (
 	"strconv"
 
 	"cloud.google.com/go/bigquery"
-	"google.golang.org/api/iterator"
 )
 
 const queryTypeSearch = "search"
@@ -34,12 +33,12 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 	case queryTypeSearch:
 		log.Printf("search: %s, offset: %v", queryText, offset)
 		query = client.Query(`
-			SELECT name, url, thumbnail, is_gif, gif_thumbnail 
+			SELECT name, url, thumbnail, is_gif, gif_thumbnail, CASE WHEN Usages.usages is NULL THEN 0 ELSE Usages.usages END as usages 
 			FROM github-macros.macros.macros Macros
 			LEFT JOIN github-macros.macros.usages Usages
 			ON Macros.name = Usages.macro_name
 			WHERE name LIKE @name
-			ORDER BY Usages.usages, Macros.name DESC 
+			ORDER BY usages, Macros.name DESC 
 			LIMIT @limit
 			OFFSET @offset
 		`)
@@ -69,11 +68,11 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 	case "", queryTypeSuggestion:
 		log.Printf("suggestion: offset: %v", offset)
 		query = client.Query(`
-			SELECT name, url, thumbnail, is_gif, gif_thumbnail 
+			SELECT name, url, thumbnail, is_gif, gif_thumbnail, CASE WHEN Usages.usages is NULL THEN 0 ELSE Usages.usages END as usages
 			FROM github-macros.macros.macros Macros
 			LEFT JOIN github-macros.macros.usages Usages
 			ON Macros.name = Usages.macro_name
-			ORDER BY Usages.usages, Macros.name DESC
+			ORDER BY usages, Macros.name DESC
 			LIMIT @limit
 			OFFSET @offset
 		`)
@@ -108,40 +107,23 @@ func execQuery(r *http.Request) (string, error) {
 		return "", fmt.Errorf("getQuery: %v", err)
 	}
 
-	iter, err := runQuery(ctx, query)
-	if err != nil {
-		return "", fmt.Errorf("runQuery: %v", err)
-	}
+	rows := getQueryResults(query)
 
-	rows := []MacroRow{}
+	hasMore := len(rows) > resultsPerPage
+
+	// remove the extra item we fetched just to verify if we have more
+	if hasMore {
+		rows = rows[:resultsPerPage]
+	}
 
 	isQueryGet := r.URL.Query().Get("type") == queryTypeGet
-
-	for {
-		var curRow MacroRow
-		err = iter.Next(&curRow)
-
-		if err == iterator.Done {
-			break
-		}
-
-		if err != nil {
-			return "", fmt.Errorf("error iterating through results: %v", err)
-		}
-
-		rows = append(rows, curRow)
-
-		if len(rows) == resultsPerPage && !isQueryGet {
-			break
-		}
-	}
 
 	responseMap := map[string]interface{}{
 		"data": rows,
 	}
 
 	if !isQueryGet {
-		responseMap["has_more"] = iter.TotalRows > resultsPerPage
+		responseMap["has_more"] = len(rows) > resultsPerPage
 	}
 
 	response, err := json.Marshal(responseMap)
