@@ -151,12 +151,8 @@ func postprocessNewMacro(
 		log.Printf("error while fetching macro with the same URL: %v", err)
 	}
 
-	markTimeStamp("Lookup for the same orig URL")
-
 	if macroRow != nil {
 		newMacro := duplicateExistingMacro(bigqueryClient, macroName, macroRow)
-
-		markTimeStamp("Duplication done")
 
 		return newMacro, true
 	}
@@ -187,8 +183,6 @@ func postprocessNewMacro(
 		return nil, false
 	}
 
-	markTimeStamp("Processing done")
-
 	if err != nil {
 		log.Panicf("failed to process new macro: %v", err)
 	}
@@ -208,8 +202,6 @@ func postprocessNewMacro(
 		log.Panicf("failed to get github images: %v", err)
 	}
 
-	markTimeStamp("Convered to Github images")
-
 	finalMacroURL, ok := githubURLs[macroURL]
 	if !ok {
 		log.Panic("failed to locate github macro image")
@@ -222,13 +214,9 @@ func postprocessNewMacro(
 		log.Panicf("failed to create reports entry: %v", err)
 	}
 
-	markTimeStamp("Create report entry")
-
 	if err := createNewUsagesEntry(bigqueryClient, macroName); err != nil {
 		log.Panicf("failed to create usages entry: %v", err)
 	}
-
-	markTimeStamp("Create new usage entry")
 
 	if shouldAdd {
 		insertNewMacro(
@@ -246,8 +234,6 @@ func postprocessNewMacro(
 	} else {
 		updateMacro(bigqueryClient, macroName, finalMacroURL, finalThumbnailURL, finalGifThumbnailURL, thumbnailSize, gifThumbnailSize)
 	}
-
-	markTimeStamp("Insert macro into the DB")
 
 	newMacro := &MacroRow{
 		Name:         macroName,
@@ -466,8 +452,6 @@ func processGif(
 	success = false
 	gifBytes, err := sendHTTPGetRequest(macroURL)
 
-	markTimeStamp("Fetch gif done")
-
 	if err != nil {
 		panicIfNotPermanent(err, "unable to read GIF '%s' : %v", macroURL, err)
 		return
@@ -481,8 +465,6 @@ func processGif(
 		return
 	}
 
-	markTimeStamp("Extract gif first frame done")
-
 	if macroSize < cGifThumbnailSize {
 		success = true
 		return
@@ -494,8 +476,6 @@ func processGif(
 	if err != nil {
 		log.Printf("failed to get resizes GIF: %v", err)
 	}
-
-	markTimeStamp("Resize gif done")
 
 	if gifThumbnailSize > macroSize {
 		log.Printf("resized gif is bigger than the original gif: %s", macroURL)
@@ -637,8 +617,6 @@ func processImage(storageClient *storage.Client, macroURL string, macroSize int6
 		compressedImage, compressedImageSize, compressionErr = getCompressedImageURL(macroURL)
 	}
 
-	markTimeStamp("Image compression done")
-
 	if compressionErr != nil {
 		log.Printf("unable to compress '%s' using API: %v", macroURL, compressionErr)
 	} else if compressedImageSize < cThumbnailMaxSize {
@@ -653,8 +631,6 @@ func processImage(storageClient *storage.Client, macroURL string, macroSize int6
 	if macroActualSize != 0 {
 		macroSize = macroActualSize
 	}
-
-	markTimeStamp("Image resize done")
 
 	if thumbnailErr != nil {
 		log.Printf("failed to resize '%s': %v", macroURL, thumbnailErr)

@@ -7,10 +7,6 @@ import (
 	"cloud.google.com/go/pubsub"
 )
 
-func PublishNewMacroMessage(macroName string) {
-	publishNewMacroMessage(macroName)
-}
-
 func publishNewMacroMessage(macroName string) error {
 	ctx := context.Background()
 

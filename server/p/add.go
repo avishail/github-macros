@@ -8,20 +8,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
 )
-
-var startTime = time.Now().Unix()
-var lastTimeStamp = time.Now().Unix()
-
-func markTimeStamp(msg string) {
-	now := time.Now().Unix()
-	log.Printf("[cur: %d, total: %d]: %s\n", now-lastTimeStamp, now-startTime, msg)
-	lastTimeStamp = now
-}
 
 var supportedTypes = map[string]bool{
 	"image/gif":  true,
@@ -62,8 +52,6 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 
 	errCode := validateNameAndURL(client, macroName, macroURL)
 
-	markTimeStamp("Basic name and URL validation")
-
 	if errCode != Success {
 		return nil, errCode
 	}
@@ -76,8 +64,6 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 	if errCode := validateFileSizeAndType(fileSize, fileType, cFileMaxSize); errCode != Success {
 		return nil, errCode
 	}
-
-	markTimeStamp("File size and type validation")
 
 	isGif := isGif(fileType)
 
@@ -260,6 +246,4 @@ func Add(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Panicf("error writing response: %v", err)
 	}
-
-	markTimeStamp("Done")
 }
