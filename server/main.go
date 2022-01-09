@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"cloud.google.com/go/bigquery"
 	"github.com/avishail/github-macros/server/p"
 	"github.com/joho/godotenv"
 )
@@ -28,7 +32,7 @@ func (rw *ResponseWriter) WriteHeader(statusCode int) {}
 func testSearchQuery() {
 	r := &http.Request{
 		URL: &url.URL{
-			RawQuery: "type=search&text=ship",
+			RawQuery: "type=search&text=dog",
 		},
 	}
 
@@ -38,7 +42,7 @@ func testSearchQuery() {
 func testGetQuery() {
 	r := &http.Request{
 		URL: &url.URL{
-			RawQuery: "type=get&text=battleshipit,nonono",
+			RawQuery: "type=get&text=wowdogreview",
 		},
 	}
 
@@ -48,19 +52,30 @@ func testGetQuery() {
 func testSuggestionQuery() {
 	r := &http.Request{
 		URL: &url.URL{
-			RawQuery: "type=suggestion",
+			RawQuery: "?type=suggestion&page=0",
 		},
 	}
 
 	p.Query(&ResponseWriter{}, r)
 }
 
+// func testPreprocessing() {
+// 	r := &http.Request{
+// 		URL: &url.URL{
+// 			RawQuery: "name=nonono2&url=https://camo.githubusercontent.com/0fabfd20960f454a010c9761f4ed4edf340c0c87a4302d95270a26471daf6812/68747470733a2f2f6d65646961342e67697068792e636f6d2f6d656469612f764d4e6f4b4b7a6e4f72554a692f67697068792e6769663f6369643d373930623736313164366236336563356633643738613633616434633032343139303064393834353538313766366233267269643d67697068792e6769662663743d67",
+// 			//RawQuery: "name=blablabla&url=https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/BB61_USS_Iowa_BB61_broadside_USN.jpg/1280px-BB61_USS_Iowa_BB61_broadside_USN.jpg",
+// 		},
+// 	}
+// 	p.Preprocess(&ResponseWriter{}, r)
+// }
+
 func testAddMutation() {
+	t := time.Now().Unix()
 	r := &http.Request{
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"type=add&name=nonono&url=https://media4.giphy.com/media/14ooolmDKfgrO8/giphy.gif?cid=ecf05e47nxyksedynzqvvxvf0ut55r38ak4ujw3agydaozjn&rid=giphy.gif&ct=g",
+				"name=battleshipit&url=https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg",
 			),
 		),
 		Header: http.Header{
@@ -68,15 +83,16 @@ func testAddMutation() {
 		},
 	}
 
-	p.Mutate(&ResponseWriter{}, r)
+	p.Add(&ResponseWriter{}, r)
+	fmt.Println("Total time: ", time.Now().Unix()-t)
 }
 
-func testUseMutation() {
+func testUsage() {
 	r := &http.Request{
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"type=use&name=nonono",
+				"name=magic",
 			),
 		),
 		Header: http.Header{
@@ -84,7 +100,7 @@ func testUseMutation() {
 		},
 	}
 
-	p.Mutate(&ResponseWriter{}, r)
+	p.Usage(&ResponseWriter{}, r)
 }
 
 func testReportMutation() {
@@ -92,7 +108,7 @@ func testReportMutation() {
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"type=report&name=blabla",
+				"name=magic",
 			),
 		),
 		Header: http.Header{
@@ -100,7 +116,31 @@ func testReportMutation() {
 		},
 	}
 
-	p.Mutate(&ResponseWriter{}, r)
+	p.Report(&ResponseWriter{}, r)
+}
+
+func runQuery(ctx context.Context, query *bigquery.Query) (*bigquery.RowIterator, error) {
+	job, err := query.Run(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+
+	status, err := job.Wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if status.Err() != nil {
+		return nil, status.Err()
+	}
+
+	iter, err := job.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return iter, nil
 }
 
 func main() {
@@ -109,11 +149,56 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	// testSearchQuery()
-	// testGetQuery()
+	// f, err := os.Open("/workspaces/github-macros/server/test.jpeg")
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// defer f.Close()
+	// co, er := jpeg.DecodeConfig(f)
+	// fmt.Println(co, er)
+
+	// image, tt, err := image.DecodeConfig(f)
+	// fmt.Println(err)
+	// fmt.Println(tt)
+	// fmt.Println(image)
+
 	// testSuggestionQuery()
 
-	// testAddMutation()
-	// testUseMutation()
-	testReportMutation()
+	// p.PublishNewMacroMessage("macroName123")
+
+	//testPreprocessing()
+
+	//testSearchQuery()
+	//testGetQuery()
+	//testSuggestionQuery()
+	// testUsage()
+	testAddMutation()
+	//testUsage()
+	//testReportMutation()
+
+	// ctx := context.Background()
+
+	// client, err := bigquery.NewClient(ctx, "github-macros")
+	// if err != nil {
+	// 	fmt.Println(err)
+	// 	return
+	// }
+	// defer client.Close()
+
+	// query := client.Query(`
+	// 	INSERT INTO github-macros.macros.reports (macro_name, reports) VALUES ("abc", 0);
+	// 	INSERT INTO github-macros.macros.reports (macro_name, reports) VALUES ("def", 0);
+	// `)
+	// query.Parameters = []bigquery.QueryParameter{
+	// 	{
+	// 		Name:  "macro_name",
+	// 		Value: "cool_macro",
+	// 	},
+	// }
+
+	// fmt.Println(runQuery(ctx, query))
+
+	// githubImages, err := p.GetGithubImages(client, []string{"https://upload.wikimedia.org/wikipedia/commons/e/ea/BB61_USS_Iowa_BB61_broadside_USN.jpg", "https://www.researchgate.net/profile/Kirsi-Kauppinen/publication/305882572/figure/fig2/AS:391865942724609@1470439529117/A-doge-meme-about-linguistics.png"})
+
+	// fmt.Println(githubImages, err)
 }

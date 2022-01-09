@@ -8,16 +8,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"cloud.google.com/go/bigquery"
-	"google.golang.org/api/iterator"
 )
-
-type row struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
 
 const queryTypeSearch = "search"
 const queryTypeGet = "get"
@@ -39,9 +32,21 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 	switch r.URL.Query().Get("type") {
 	case queryTypeSearch:
 		log.Printf("search: %s, offset: %v", queryText, offset)
-		query = client.Query(
-			"SELECT name, url FROM `github-macros.macros.macros` WHERE name LIKE @name ORDER BY usages, name DESC LIMIT @limit OFFSET @offset",
-		)
+		query = client.Query(`
+			SELECT 
+				name,
+				url,
+				width,
+				height,
+				(CASE WHEN Usages.clicks is NULL THEN 0 ELSE Usages.clicks END) + (CASE WHEN Usages.directs is NULL THEN 0 ELSE Usages.directs END) as usages,
+			FROM github-macros.macros.macros Macros
+			LEFT JOIN github-macros.macros.usages Usages
+			ON Macros.name = Usages.macro_name
+			WHERE name LIKE @name
+			ORDER BY usages, Macros.name DESC 
+			LIMIT @limit
+			OFFSET @offset
+		`)
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "name",
@@ -58,16 +63,29 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		}
 	case queryTypeGet:
 		log.Printf("get: %s", queryText)
-		query = client.Query("SELECT * FROM `github-macros.macros.macros` WHERE name IN UNNEST(@list)")
+		query = client.Query("SELECT name, url, width, height FROM `github-macros.macros.macros` WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
-				Name:  "list",
-				Value: strings.Split(queryText, ","),
+				Name:  "name",
+				Value: queryText,
 			},
 		}
 	case "", queryTypeSuggestion:
 		log.Printf("suggestion: offset: %v", offset)
-		query = client.Query("SELECT * FROM `github-macros.macros.macros` ORDER BY usages, name DESC LIMIT @limit OFFSET @offset")
+		query = client.Query(`
+			SELECT
+				name,
+				url,
+				width,
+				height,
+				(CASE WHEN Usages.clicks is NULL THEN 0 ELSE Usages.clicks END) + (CASE WHEN Usages.directs is NULL THEN 0 ELSE Usages.directs END) as usages
+			FROM github-macros.macros.macros Macros
+			LEFT JOIN github-macros.macros.usages Usages
+			ON Macros.name = Usages.macro_name
+			ORDER BY usages, Macros.name DESC
+			LIMIT @limit
+			OFFSET @offset
+		`)
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "limit",
@@ -99,40 +117,23 @@ func execQuery(r *http.Request) (string, error) {
 		return "", fmt.Errorf("getQuery: %v", err)
 	}
 
-	iter, err := runQuery(ctx, query)
-	if err != nil {
-		return "", fmt.Errorf("runQuery: %v", err)
-	}
+	rows := getQueryResults(query)
 
-	rows := []row{}
+	hasMore := len(rows) > resultsPerPage
+
+	// remove the extra item we fetched just to verify if we have more
+	if hasMore {
+		rows = rows[:resultsPerPage]
+	}
 
 	isQueryGet := r.URL.Query().Get("type") == queryTypeGet
-
-	for {
-		var curRow row
-		err = iter.Next(&curRow)
-
-		if err == iterator.Done {
-			break
-		}
-
-		if err != nil {
-			return "", fmt.Errorf("error iterating through results: %v", err)
-		}
-
-		rows = append(rows, curRow)
-
-		if len(rows) == resultsPerPage && !isQueryGet {
-			break
-		}
-	}
 
 	responseMap := map[string]interface{}{
 		"data": rows,
 	}
 
 	if !isQueryGet {
-		responseMap["has_more"] = iter.TotalRows > resultsPerPage
+		responseMap["has_more"] = len(rows) > resultsPerPage
 	}
 
 	response, err := json.Marshal(responseMap)

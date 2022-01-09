@@ -1,26 +1,124 @@
 /*
-    TODO
-    1. basic add flow with some client side validation
-    2. keep track of the last 100 usages, store it in local storage, load it during boot and place the top X 
-       need to see how we make sure we will know how to load more suggestions nicely
-       with top usages - DONE but needs to be tested
-    3. settings - configure more sites and set the action keys
-    4. fetch and show small footer from the server? Ask Sivan
-    5. test load more
+
+1. test load more
+
 */
 
+
+class ErrorCodes {
+    static Success = 0
+    static EmptyName = 1
+	static NameContainsSpaces = 2
+	static NameAlreadyExist = 3
+	static EmptyURL = 4
+	static InvalidURL = 5
+	static URLHostnameNotSupported = 6
+	static FileIsTooBig = 7
+	static FileFormatNotSupported = 8
+    static TransientError = 9
+}
+
+Object.freeze(ErrorCodes); 
+
+const gVersion = "1.0.0"
+
 const numberOfTopUsagesToDisplay = 20;
-const maxTopUsagesToStore = 100;
-const maxSuggestionsFreshnessDuration = 60 * 60 * 24;
+const maxTopUsagesToStore = 1;
+const maxSuggestionsFreshnessDuration = 60 * 60 * 24 * 1000;
 const macroNamePrefix = 'github-macros-';
 const loadMorePixelsBeforeScrollEnd = 200;
-const hostnameToPattern = new Map();
 const contentCache = new Map();
 const macroNameToUrl = new Map();
 const tooltipsCache = new Map();
 const targetIdToTarget = new Map();
 const macroTopUsages = [];
 const nameToTopUsage = new Map();
+
+const gGifIconSrc = chrome.runtime.getURL('img/icons/gif.png');
+const gMagGlassIconSrc = chrome.runtime.getURL('img/icons/mglass-4x.png');
+const gPlusIconSrc = chrome.runtime.getURL('img/icons/plus-4x.png');
+const gXIconSrc = chrome.runtime.getURL('img/icons/x-4x.png');
+const gVIconSrc = chrome.runtime.getURL('img/icons/v-4x.png');
+
+const gJavascriptErrorType = "js"
+const gNetworkErrorType = "net"
+
+const gDirectUsageTriggerType = 'direct'
+const gClickUsageTriggerType = 'click'
+
+const gGithubMediaPattern = '![$name]($url)';
+
+
+reportClientError = function(type, stacktrace) {
+    $.post( 
+        "https://us-central1-github-macros.cloudfunctions.net/client_error/",
+        { version: gVersion, type: type, stacktrace: stacktrace},
+    );
+    // console.log(stacktrace)
+}
+
+catchAndLog = function(f) {
+    return function() {
+        try {
+            return f.apply(this, arguments);
+        } catch (e) {
+            reportClientError(gJavascriptErrorType, e.stack);
+        }
+    }
+}
+
+ajax = function(settings) {
+    settings = { ...settings };
+
+    if (settings['success']) {
+        settings['success'] =  catchAndLog(settings['success']);
+    }
+
+    const origFailCallback = settings['fail'];
+
+    settings['fail'] = function(request, status, error) {
+        if (origFailCallback) {
+            catchAndLog(origFailCallback)()
+        }
+        reportClientError(
+            gNetworkErrorType,
+            JSON.stringify(
+                {
+                    url: settings['url'],
+                    status: status,
+                    error: error,
+                    content: request.responseText,
+                }
+            ),
+        )
+    }
+
+    if (settings['complete']) {
+        settings['complete'] = catchAndLog(settings['complete']);
+    }
+
+    catchAndLog(() => $.ajax(settings))()
+}
+
+ajaxGet = function(url, success) {
+    ajax(
+        {
+            url: url,
+            success: success,
+        },
+    )
+}
+
+ajaxPost = function(url, data, success) {
+    ajax(
+        {
+            url: url,
+            type: 'POST',
+            data: data, 
+            success: success,
+        },
+    )
+}
 
 getElement = function(targetId, id) {
     return $('#' + targetId + '_' + id)[0]
@@ -38,7 +136,7 @@ hideSearchSpinner = function(targetId) {
 
 initSearchInput = function (targetId) {
     const searchInput = getElement(targetId, 'macroSearchInput');
-    searchInput.addEventListener('input', updateValue);
+    searchInput.addEventListener('input', catchAndLog(updateValue));
 
     let inputTimerId = null;
 
@@ -68,33 +166,35 @@ initSearchInput = function (targetId) {
         showSearchSpinner(targetId)
 
         inputTimerId = setTimeout(
-            () => {
-                ongoingRequests.set(searchText, true);
-                fetchContent(
-                    targetId,
-                    searchText,
-                    0,
-                    (content) => {
-                        updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
-                        
-                        ongoingRequests.delete(searchText);
+            catchAndLog(
+                () => {
+                    ongoingRequests.set(searchText, true);
+                    fetchContent(
+                        targetId,
+                        searchText,
+                        0,
+                        (content) => {
+                            updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
+                            
+                            ongoingRequests.delete(searchText);
 
-                        // check if in the mean time, the user changed the input
-                        if (searchText !== searchInput.value) {
-                            return;
-                        }
+                            // check if in the mean time, the user changed the input
+                            if (searchText !== searchInput.value) {
+                                return;
+                            }
 
-                        updateUIWithContent(targetId, content, true);
-                        hideSearchSpinner(targetId);
-                    },
-                    () => { 
-                        ongoingRequests.delete(searchText);
-                        if (searchText === searchInput.value) {
+                            updateUIWithContent(targetId, content, true);
                             hideSearchSpinner(targetId);
+                        },
+                        () => { 
+                            ongoingRequests.delete(searchText);
+                            if (searchText === searchInput.value) {
+                                hideSearchSpinner(targetId);
+                            }
                         }
-                    }
-                )
-            },
+                    )
+                },
+            ),    
             500,
         );
     }
@@ -105,8 +205,7 @@ initSearchInput = function (targetId) {
  * appear. Each site might have its own format.
  */ 
 getInjectedMacro = function(name, url) {
-    const pattern = hostnameToPattern.get(location.hostname);
-    return pattern.replace('$name', macroNamePrefix+name).replace('$url', url);
+    return gGithubMediaPattern.replace('$name', macroNamePrefix+name).replace('$url', url);
 }
 
 selectMacro = function(targetId, macro) {
@@ -122,13 +221,18 @@ selectMacro = function(targetId, macro) {
     target.selectionStart = selectionIndex + macroToInject.length;
     target.selectionEnd = target.selectionStart;
 
-    setTimeout(() => {
-        updateTopUsages(macro);
-        $.post( 
-            "https://us-central1-github-macros.cloudfunctions.net/mutate/",
-            { type: "use", name: macro["name"] },
-        );
-    }, 0);
+    setTimeout(
+        catchAndLog(
+            () => {
+                updateTopUsages(macro);
+                ajaxPost( 
+                    "https://us-central1-github-macros.cloudfunctions.net/usage/",
+                    {name: macro["name"], trigger: gClickUsageTriggerType},
+                );
+            }
+        ),
+        0,
+    );
 }
 
 /*
@@ -157,11 +261,14 @@ fetchContent = function(targetId, searchText, pageToFetch, onFinishCallback, onE
         url.searchParams.append('page', pageToFetch)
     }
 
-    $.ajax({
+    ajax({
         url: url,
         success: function(responseText) {
             results = JSON.parse(responseText);
             onFinishCallback(results);
+            if ('system_message' in results) {
+                processSystemMessage(results['system_message']);
+            }
         },
         error: function() {
             if (onErrorCallback) {
@@ -195,45 +302,106 @@ updateCacheWithNewContent = function(searchText, items, isRealPage, hasMore) {
     cachedContent['has_more'] = hasMore;
 }
 
-updateUIWithContent = function (targetId, content, isFirstPage) {
-    leftMacroDiv = getElement(targetId, 'leftMacros');
-    rightMacroDiv = getElement(targetId, 'rightMacros');
+createSingleMacro = function(targetId, item) {
+    const div = document.createElement('div');
+    div.style.width = '100%';
+    div.style.aspectRatio = (item['width']/item['height']);
+    div.style.overflow = 'auto';
+    div.style.marginTop = '5px';
+    div.style.marginBottom = '5px';
+    div.style.borderRadius = '5px';
+    div.style.borderStyle = 'solid';
+    div.style.borderWidth = '1px';
+    div.style.borderColor = '#234C87';
+    
+    div.style.position = 'relative';
+    div.onclick = function() {selectMacro(targetId, item);};
 
+    const spinnerWrapper = document.createElement('div');
+    spinnerWrapper.style.display = 'flex';
+    spinnerWrapper.style.width = '100%';
+    spinnerWrapper.style.height = '100%';
+    spinnerWrapper.style.position = 'absolute';
+    spinnerWrapper.style.justifyContent = 'center';
+    spinnerWrapper.style.alignItems = 'center';
+
+
+    const spinner = document.createElement('div');
+    spinner.classList.add("gh-macros-loader");
+    spinner.classList.add("gh-macros-dark-loader");
+    spinner.style.width = '10px';
+    spinner.style.height = '10px';
+    spinner.style.fontSize = '1px';
+    
+    spinnerWrapper.appendChild(spinner);
+    div.appendChild(spinnerWrapper);
+
+    const image = document.createElement('img');
+    image.style.width = '100%';
+    image.style.height = '100%';
+    image.src = item['url'];
+    image.title = item['name'];
+    image.style.display = 'block';
+    image.onerror = function () {
+        div.parentElement.removeChild(div);
+        ajaxPost(
+            "https://us-central1-github-macros.cloudfunctions.net/report/", 
+            { name: item["name"] },
+        );
+    };
+    image.onload = function () {
+        spinnerWrapper.parentElement.removeChild(spinnerWrapper); 
+    }
+
+    div.appendChild(image)
+
+    return div
+}
+
+addMacroToUI = function(targetId, macro, addAtTheEnd) {
+    meta = tooltipsCache.get(targetIdToTarget.get(targetId))
+
+    var div;
+    if (meta['left_height'] <= meta['right_height']) {
+        div = getElement(targetId, 'leftMacros');
+        meta['left_height'] += ((macro['height'] / macro['width'])) * 0.55;
+    } else {
+        div = getElement(targetId, 'rightMacros');
+        meta['right_height'] += (macro['height'] / macro['width']) * 0.45;
+    }
+
+    if (addAtTheEnd) {
+        div.appendChild(createSingleMacro(targetId, macro));
+    } else {
+        div.prepend(createSingleMacro(targetId, macro));
+    }
+    
+}
+
+clearAllMacrosFromUI = function(targetId) {
+    leftMacroDiv = getElement(targetId, 'leftMacros').innerHTML = '';
+    rightMacroDiv = getElement(targetId, 'rightMacros').innerHTML = '';
+    meta = tooltipsCache.get(targetIdToTarget.get(targetId))
+    meta['left_height'] = 0
+    meta['right_height'] = 0
+}
+
+updateUIWithContent = function (targetId, content, isFirstPage) {
     if (isFirstPage) {
-        leftMacroDiv.innerHTML = '';
-        rightMacroDiv.innerHTML = '';                            
+        clearAllMacrosFromUI(targetId);
     }
 
     getElement(targetId, 'moreResultsSpinner').style.display = content['has_more'] ? 'inline' : 'none';
-
-    let divs = [leftMacroDiv, rightMacroDiv];
     const items = content['data'];
     for (var i = 0; i < items.length; i++) {
-        const item = items[i];
-
-        const image = document.createElement('img');
-        image.style.width = '100%';
-        image.style.marginTop = '5px';
-        image.style.marginBottom = '5px';
-        image.style.borderRadius = '5px';
-        image.src = item['url'];
-        image.title = item['name'];
-        image.onclick = function() {selectMacro(targetId, item);};
-        image.onerror = function () {
-            $.post( "https://us-central1-github-macros.cloudfunctions.net/mutate/", { type: "report", name: item["name"] } );
-        };
-        divs[i % 2].appendChild(image);
+        addMacroToUI(targetId, items[i], true);
     }
 }
 
 createTooltip = function(targetId, target) {
     const idPrefix = targetId + '_';
-    const magGlassSrc = chrome.runtime.getURL('img/icons/mglass-4x.png');
-    const plusSrc = chrome.runtime.getURL('img/icons/plus-4x.png');
-    const errorXSrc = chrome.runtime.getURL('img/icons/x-4x.png');
-    const successVSrc = chrome.runtime.getURL('img/icons/v-4x.png');
-    
     var fetchWasCalled = false;
+    var resizeObserver;
 
     return new jBox(
         'Tooltip',
@@ -242,8 +410,8 @@ createTooltip = function(targetId, target) {
             addClass: 'tooltipBorder',
             width: '300px',
             height: '400px',
-            closeOnClick: 'body',
             closeOnEsc: true,
+            closeOnClick: 'body',
             position: {
                 x: 'left',
                 y: 'top'
@@ -253,48 +421,90 @@ createTooltip = function(targetId, target) {
             offset: {
                 x: 25
             },
-            onCreated: function () {
-                initNewTooltip(targetId);
-            },
-            onOpen: function () {
-                if (contentCache.has('')) {
-                    updateUIFromCache(targetId, '')
-                    return;
-                }
+            onCreated: catchAndLog(
+                function () {
+                    initNewTooltip(targetId);
+                },
+            ),
+            onOpen: catchAndLog(
+                function () {
+                    if (fetchWasCalled) {
+                        return;
+                    }
 
-                if (fetchWasCalled) {
-                    return;
-                }
+                    fetchWasCalled = true;
 
-                fetchWasCalled = true;
+                    if (contentCache.has('')) {
+                        updateUIFromCache(targetId, '')
 
-                fetchContent(
-                    targetId,
-                    '',
-                    0,
-                    (content) => {
-                        updateCacheWithNewContent('', content['data'], true, content['has_more']);
-                        updateUIWithContent(targetId, content, true);
-                        chrome.storage.sync.set({
-                            'suggestions': JSON.stringify(content),
-                            'suggestions_freshness': Date.now().toString()
-                        });
-                    },
-                    () => { fetchWasCalled = false; },
-                )
-            },
-            onOpenComplete: function () {
-                getElement(targetId, 'macroSearchInput').focus();
-            },
-            onClose: function () {
-                handleCloseTooltip(targetId);
-            },
+                        // TODO remove this once we will have enough initial images
+                        // this will trigger a silent update in the background so next
+                        // time the user opens the tooltip, the new content will be there
+                        fetchContent(
+                            targetId,
+                            '',
+                            0,
+                            (content) => {
+                                fetchWasCalled = false;
+                                updateCacheWithNewContent('', content['data'], true, content['has_more']);
+                                updateUIWithContent(targetId, contentCache.get(''), true);
+                                chrome.storage.sync.set({
+                                    'suggestions': JSON.stringify(content),
+                                    'suggestions_freshness': Date.now().toString()
+                                });
+                            },
+                            () => { fetchWasCalled = false; },
+                        )
+
+                        return;
+                    }
+
+                    fetchContent(
+                        targetId,
+                        '',
+                        0,
+                        (content) => {
+                            fetchWasCalled = false;
+                            updateCacheWithNewContent('', content['data'], true, content['has_more']);
+                            updateUIWithContent(targetId, content, true);
+                            chrome.storage.sync.set({
+                                'suggestions': JSON.stringify(content),
+                                'suggestions_freshness': Date.now().toString()
+                            });
+                        },
+                        () => { fetchWasCalled = false; },
+                    )
+                },
+            ),
+            onOpenComplete: catchAndLog(
+                function () {
+                    maybeShowSystemMessage(targetId);
+                    const tooltipDiv = getElement(targetId, 'macroMainWindow').parentNode;
+                    const macrosSection = getElement(targetId, 'macrosSection');
+                    resizeObserver = new ResizeObserver(entries => {
+                        macrosSection.style.height = tooltipDiv.offsetHeight - 55 + "px";
+                    });
+                    resizeObserver.observe(tooltipDiv);
+                    // since tooltip might be shorter, we need to let the macros section to have
+                    // the rest of the tooltip's space
+                    //getElement(targetId, 'macrosSection').style.height = getElement(targetId, 'macroMainWindow').parentNode.offsetHeight - 55 + "px";
+                    getElement(targetId, 'macroSearchInput').focus();
+                },
+            ),    
+            onClose: catchAndLog(
+                function () {
+                    if (resizeObserver) {
+                        resizeObserver.disconnect();
+                    }
+                    handleCloseTooltip(targetId);
+                },
+            ),    
             content:`
-            <div style="width: 100%; height: 100%; position: absolute; top: 0px; left: 0px; right: 0px; bottom: 0px; overflow: hidden">
+            <div id="${idPrefix}macroMainWindow" style="width: 100%; height: 100%; position: absolute; top: 0px; left: 0px; right: 0px; bottom: 0px; overflow: hidden">
                 <div style="display: flex; flex-direction: row; height: 55px;">
                     <div style="display: flex; flex-direction: row; width: 100%; height: auto; margin: 10px; border-width: 1px; border-style: solid none solid solid; border-color: #234C87; border-radius: 18px; overflow: auto">
                         <div style="display: flex; margin-left: 10px; width: 15px; height: 15px; justify-content: center; align-items: center; height: 100%; ">
-                            <img id="${idPrefix}searchIcon" style="width: 15px; height: 15px;" src="${magGlassSrc}" />
+                            <img id="${idPrefix}searchIcon" style="width: 15px; height: 15px;" src="${gMagGlassIconSrc}" />
                             <div id="${idPrefix}searchSpinner" style="display: none;" class="gh-macros-loader gh-macros-dark-loader"></div>
                         </div>
                         <div style="display: flex; justify-content: center; align-items: center; height: 100%; flex-grow: 1;">
@@ -317,7 +527,7 @@ createTooltip = function(targetId, target) {
                     </div>
                 </div>
                 <div id="${idPrefix}openMacroCreationButton" class="gh-macros-box-shadow gh-macros-hoover-bg" style="z-index: 1; display: flex; justify-content: center; align-items: center; position: absolute; right: 16px; bottom: 16px; width: 30px; height: 30px; background-color: #234C87; border-radius: 15px;">
-                    <img style="width: 7px; height: 7px" src="${plusSrc}" />
+                    <img style="width: 7px; height: 7px" src="${gPlusIconSrc}" />
                 </div>
                 <div id="${idPrefix}addNewMacroWrapper" style="z-index: 2; display: flex; flex-direction: column; position: absolute; bottom: 0; left:0; right: 0; width: 100%; height: 0; align-items: end">
                     <div id="${idPrefix}addNewMacroCloseMargins" style="height: 150px; width: 100%"></div>
@@ -342,19 +552,30 @@ createTooltip = function(targetId, target) {
                             <div id="${idPrefix}addNewMacroButton" style="display: flex; border-radius: 4px; margin: 15px 15px 15px 15px; background-color: #FFFFFF; justify-content: center;">
                                 <text style="font-family: 'Pragati Narrow'; font-weight: 700; font-size: 12px; color: black; user-select: none; margin: 4px;">Add to the pile</text>
                             </div>
-                            <div style="display: flex; flex-grow: 1; flex-direction: column; margin: 0px 15px 15px 15px; justify-content: center;">
+                            <div style="display: flex; flex-grow: 1; flex-direction: column; margin: 0px 15px 15px 15px;">
                                 <div id="${idPrefix}addNewMacroSpinner" class="gh-macros-light-loader gh-macros-loader" style="display: none; font-size: 2px;"></div>
                                 <div id="${idPrefix}addNewMacroError" style="display: none; flex-direction: column; align-items: center; text-align: center;">
-                                    <img src="${errorXSrc}" style="width: 16px; height: 16px"/>
+                                    <img src="${gXIconSrc}" style="width: 12px; height: 12px"/>
                                     <div id="${idPrefix}addNewMacroErrorMessage" class="gh-macros-add-new-error-message">
                                     </div>
                                 </div>
                             </div>
                         </div> 
                         <div id="${idPrefix}addNewMacroSuccess" style="display: none;flex-direction: column;width: 100%;height: 100%;align-items: center;justify-content: center;">
-                            <img src="${successVSrc}" style="width: 34px;height: 25px;">
-                            <text style="font-family: 'Pragati Narrow';font-weight: 400;font-size: 16px;color: white;user-select: none;margin: 20;text-align: center;">It was added succesfully to the pile and you can start using it! Thanks for contributing :)</text>
+                            <img src="${gVIconSrc}" style="width: 34px;height: 25px;">
+                            <text style="font-family: 'Pragati Narrow';font-weight: 400;font-size: 16px;color: white;user-select: none;margin: 20;text-align: center;">It was added succesfully to the pile and it will remain as long as the original image remains accessible. Thanks for contributing :)</text>
                         </div>   
+                    </div>  
+                </div>
+                <div id="${idPrefix}systemMessageWrapper" style="z-index: 2; display: none; flex-direction: column; position: absolute; bottom: 0; left:0; right: 0; width: 100%; height: 0; justify-content: end">
+                    <div id="${idPrefix}systemMessageCloseMargins" style="height: 150px; width: 100%"></div>
+                    <div style="display: flex; flex-direction: column; height: auto; width: 100%; background-color: #234C87; border-radius: 10px 10px 0px 0px;">
+                        <div style="text-align: right; margin:10px 10px 0 10px;">
+                            <text id="${idPrefix}systemMessageCloseButton" style="font-family: 'Pragati Narrow'; font-weight: 700; font-size: 12px; color: white; user-select: none;">X</text>
+                        </div>
+
+                        <div id="${idPrefix}systemMessageContent" style="display: flex; padding: 0px 8px 8px 8px; flex-direction: column; width: 100%; height: 100%; color: white;">
+                        </div> 
                     </div>  
                 </div> 
             </div>
@@ -378,8 +599,10 @@ createTooltipMeta = function(target) {
     const tooltip = createTooltip(targetId, target);
 
     const newTooltipMeta = {
-        'targetId': targetId,
+        'target_id': targetId,
         'tooltip': tooltip,
+        'left_height': 0,
+        'right_height': 0,
     };
 
     return newTooltipMeta
@@ -388,10 +611,10 @@ createTooltipMeta = function(target) {
 handleCloseTooltip = function(targetId) {
     getElement(targetId, 'macroSearchInput').value = '';
     hideSearchSpinner(targetId);
-    getElement(targetId, 'leftMacros').innerHTML = '';
-    getElement(targetId, 'rightMacros').innerHTML = '';
+    clearAllMacrosFromUI(targetId);
     getElement(targetId, 'moreResultsSpinner').style.display = 'inline';
     hideAddMacroUI(targetId);
+    dismissSystemMessage(targetId, null, false);
     targetIdToTarget.get(targetId).focus();
 }
 
@@ -400,24 +623,59 @@ initMacrosScrollLogic = function(targetId) {
     // init scroll of the macros section
     macrosSection.addEventListener(
         "onwheel" in document ? "wheel" : "mousewheel",
-        e => {
-            e.wheel = e.deltaY ? -e.deltaY : e.wheelDelta/40;
-            macrosSection.scrollTop -= e.wheel;
-        },
+        catchAndLog(
+            e => {
+                e.wheel = e.deltaY ? -e.deltaY : e.wheelDelta/40;
+                macrosSection.scrollTop -= e.wheel;
+            },
+        ),    
     );
 
     var loadingMore = false;
-    macrosSection.addEventListener('scroll', function(e) {
-        if (loadingMore) {
-            return
-        }
+    const searchInput = getElement(targetId, 'macroSearchInput');
 
-        loadingMore = true;
+    macrosSection.addEventListener(
+        'scroll',
+        catchAndLog(
+            function(e) {
+                if (loadingMore) {
+                    return
+                }
 
-        if (macrosSection.offsetHeight + macrosSection.scrollTop > macrosSection.scrollHeight - loadMorePixelsBeforeScrollEnd) {
-            fetchNextPage(targetId, () => { loadingMore = false; })
-        }
-      });
+                searchText = searchInput.text || '';
+
+                if (!(contentCache.has(searchText))) {
+                    return
+                }
+
+                content = contentCache.get(searchText)
+
+                if (!(content['has_more'])) {
+                    return
+                }
+
+                if (macrosSection.offsetHeight + macrosSection.scrollTop > macrosSection.scrollHeight - loadMorePixelsBeforeScrollEnd) {
+                    loadingMore = true;
+                    fetchContent(
+                        targetId,
+                        searchText,
+                        content['next_page'],
+                        (data) => { 
+                            loadingMore = false;
+                            updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
+                            // check if in the mean time, the user changed the input
+                            if (searchText !== searchInput.value) {
+                                return;
+                            }
+
+                            updateUIWithContent(targetId, content, true);
+                        },
+                        () => { loadingMore = false; },
+                    )
+                }
+            },
+        ),
+    );
 }
 
 showAddMacroUI = function(targetId) {
@@ -441,22 +699,119 @@ hideAddMacroUI = function(targetId) {
 initAddNewMacroLogic = function(targetId) {
     // set up add new macro button
     openMacroCreationButton = getElement(targetId, 'openMacroCreationButton');
-    openMacroCreationButton.onmouseover = function() {openMacroCreationButton.style.background='#526683'};
-    openMacroCreationButton.onmouseout = function() {openMacroCreationButton.style.background='#234C87'};
-    openMacroCreationButton.onclick = function() {showAddMacroUI(targetId)};
+    openMacroCreationButton.onmouseover = catchAndLog(function() {openMacroCreationButton.style.background='#526683'});
+    openMacroCreationButton.onmouseout = catchAndLog(function() {openMacroCreationButton.style.background='#234C87'});
+    openMacroCreationButton.onclick = catchAndLog(function() { showAddMacroUI(targetId); });
 
     // set up add new macro UI
-    getElement(targetId, 'addNewMacroCloseMargins').onclick = () => {hideAddMacroUI(targetId);}
-    getElement(targetId, 'addNewMacroCloseButton').onclick = () => {hideAddMacroUI(targetId);}
+    getElement(targetId, 'addNewMacroCloseMargins').onclick = catchAndLog(() => {hideAddMacroUI(targetId);});
+    getElement(targetId, 'addNewMacroCloseButton').onclick = catchAndLog(() => {hideAddMacroUI(targetId);});
 
-    getElement(targetId, 'addNewMacroButton').onclick = () => {addNewMacro(targetId);}
+    getElement(targetId, 'addNewMacroButton').onclick = catchAndLog(() => {addNewMacro(targetId);});
     
 }
 
-addNewMacroShowErrorMessage = function(targetId, errorHTML) {
+processSystemMessage = function(systemMessage) {
+    chrome.storage.sync.get(
+        ['system_message'],
+        catchAndLog(
+            function(items) {
+                const prevSystemMessage = (items['system_message']) ? JSON.parse(items['system_message']) : {'number_of_impressions': 0}
+                if (prevSystemMessage['id'] === systemMessage['id']) {
+                    return;
+                }
+
+                systemMessage['number_of_impressions'] = 0
+                systemMessage['impression_time'] = 0
+                
+                chrome.storage.sync.set(
+                    {
+                        'system_message': JSON.stringify(systemMessage),
+                    },
+                );
+            },
+        ),
+    ) 
+}
+
+maybeShowSystemMessage = function(targetId) {
+    chrome.storage.sync.get(
+        ['system_message'],
+        catchAndLog(
+            function(items) {
+                if (!items['system_message']) {
+                    return
+                }
+                
+                const now = Math.round(Date.now()/1000);
+
+                const systemMessage = JSON.parse(items['system_message']);
+                if (systemMessage['number_of_impressions'] === systemMessage['total_impressions']) {
+                    return;
+                }
+            
+                const timeFromLastImpression = now - systemMessage['impression_time'];
+                if (timeFromLastImpression < systemMessage['snooze_time']) {
+                    return;
+                }
+
+                getElement(targetId, 'systemMessageCloseMargins').onclick = catchAndLog(() => {dismissSystemMessage(targetId, null, false);});
+                getElement(targetId, 'systemMessageCloseButton').onclick = catchAndLog(() => {dismissSystemMessage(targetId, systemMessage, true);});
+                
+                systemMessageWrapper = getElement(targetId, 'systemMessageWrapper')
+                systemMessageWrapper.style.display = 'flex';
+                getElement(targetId, 'systemMessageContent').innerHTML = systemMessage['content'];
+                $(systemMessageWrapper).animate({'height': '100%'});
+            },
+        ),
+    )    
+}
+
+dismissSystemMessage = function(targetId, systemMessage, shouldRecordImpression) {
+    if (shouldRecordImpression) {
+        systemMessage['number_of_impressions']++;
+        systemMessage['impression_time'] = Math.round(Date.now()/1000);
+                    
+        chrome.storage.sync.set(
+            {
+                'system_message': JSON.stringify(systemMessage),
+            },
+        );
+    }
+
+    systemMessageWrapper = getElement(targetId, 'systemMessageWrapper')
+    $(systemMessageWrapper).animate({'height': '0%'});
+    systemMessageWrapper.style.display = 'none';
+    getElement(targetId, 'systemMessageContent').innerHTML = '';
+}
+
+errCodeToHTML = function(targetId, errCode) {
+    switch (errCode) {
+        case ErrorCodes.EmptyName:
+            return "Name is empty";
+        case ErrorCodes.NameContainsSpaces:
+            return "Name can't contains spaces";
+        case ErrorCodes.NameAlreadyExist:
+            return "Name is already taken";
+        case ErrorCodes.EmptyURL:
+            return "URL is empy"
+        case ErrorCodes.InvalidURL:
+            return "URL is not valid"
+        case ErrorCodes.URLHostnameNotSupported:
+            return "Only Github URLs are allowed. Drop the image into the comment box and get its URL from the Preview tab"
+        case ErrorCodes.FileIsTooBig:
+            return `Image exceeds 10Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`
+        case ErrorCodes.FileFormatNotSupported:
+            return "File format is not supported"
+        case ErrorCodes.TransientError:
+            return "Something went wrong, please try again later"
+    }
+}
+
+addNewMacroShowErrorMessage = function(targetId, errCode) {
     getElement(targetId, 'addNewMacroSpinner').style.display = 'none';
     getElement(targetId, 'addNewMacroError').style.display = 'flex';
-    getElement(targetId, 'addNewMacroErrorMessage').innerHTML = errorHTML;
+    getElement(targetId, 'addNewMacroErrorMessage').innerHTML = errCodeToHTML(targetId, errCode);
 }
 
 addNewMacroShowSuccessMessage = function(targetId) {
@@ -466,127 +821,80 @@ addNewMacroShowSuccessMessage = function(targetId) {
 
 validateInput = function(macroName, macroURL) {
     if (macroName === '') {
-        return {
-            'is_valid': false,
-            'error': 'Name is empty',
-        }
+        return ErrorCodes.EmptyName
     }
 
     if (macroName.includes(' ')) {
-        return {
-            'is_valid': false,
-            'error': 'Name can\'t contain spaces',
-        }  
+        return ErrorCodes.NameContainsSpaces
     }
 
     if (macroURL === '') {
-        return {
-            'is_valid': false,
-            'error': 'URL is empty',
-        } 
+        return ErrorCodes.EmptyURL
     }
 
     try {
-        new URL(macroURL);
+        url = new URL(macroURL);
     } catch {
-        return {
-            'is_valid': false,
-            'error': 'URL is not valid',
-        } 
+        return ErrorCodes.InvalidURL
     }
 
-    return {
-        'is_valid': true,
-    }
+    return ErrorCodes.Success
 }
 
-const addingNewMacro = false
+var addingNewMacro = false
 
 addNewMacro = function(targetId) {
     if (addingNewMacro) {
         return
     }
 
-    // $.ajax({
-    //     url: 'https://api.resmush.it/ws.php?img=https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg',
-    //     success: function(responseText) {
-    //         console.log(responseText)
-    //     },
-    // });
     getElement(targetId, 'addNewMacroError').style.display = 'none';
     getElement(targetId, 'addNewMacroSpinner').style.display = 'inline';
 
     const macroName = getElement(targetId, 'newMacroName').value;
     const macroURL = getElement(targetId, 'newMacroURL').value;
 
-    is_valid_res = validateInput(macroName, macroURL)
+    errCode = validateInput(macroName, macroURL)
 
-    if (!is_valid_res['is_valid']) {
-        addNewMacroShowErrorMessage(targetId, is_valid_res['error']);
+    if (errCode != ErrorCodes.Success) {
+        addNewMacroShowErrorMessage(targetId, errCode);
         return
     }
 
     addingNewMacro = true;
 
-    const img = document.createElement('img')
-    img.onload = () => {
-        $.post(
-            "https://us-central1-github-macros.cloudfunctions.net/mutate/",
-            { type: "add", name: macroName, url: macroURL },
-            (responseText) => {
-                const response = JSON.parse(responseText);
-                if (!(response['success'])) {
-                    addNewMacroShowErrorMessage(targetId, response["error_message"] || "Unable to process the request. Check the URL and try again"); 
-                    return
-                }
+    ajax({
+        url: "https://us-central1-github-macros.cloudfunctions.net/add/",
+        type: 'POST',
+        data: { 
+            name: macroName,
+            url: macroURL,
+        },
+        success: function(responseText) {
+            const response = JSON.parse(responseText);
+            if (response['code'] != ErrorCodes.Success) {
+                addNewMacroShowErrorMessage(targetId, response['code']); 
+                return
+            }
 
-                addNewMacroShowSuccessMessage();
+            addNewMacroShowSuccessMessage(targetId);
 
-                macroNameToUrl[macroName] = macroURL
-                contentCache.forEach(
-                    (key, value) => {
-                        if (macroName.includes(key)) {
-                            value['data'].unshift({'name': macroName, 'url': macroURL})
-                        }
-                    },
-                )
-            },
-        ).fail(
-            () => {
-                addNewMacroShowErrorMessage(targetId, "Unable to process the request. Check the URL and try again"); 
-            },
-        ).always(() => {addingNewMacro = false;});
-        
-    }
-    img.onerror = () => {
-        addNewMacroShowErrorMessage(targetId, "Unable to load the image. Please drop the image into the comment box and use the URL");
-        addingNewMacro = false;
-    }
-    img.src = macroURL;
+            const newMacro = response['data'];
 
-    /*
-     * 1. inject the URL
-     * 2. trigger preview by sending this event to the Preview button:
-     *  we can query all buttons with Preview text in it and send this event to the button
-     *  const mouseoverEvent = new Event('mouseenter');
-     *  previewButton.dispatchEvent(mouseoverEvent);
-     * 3. search the dom for the new image
-     * 4. extract the URL
-     * 5. remove the injected URL + restore mouse cursor
-     * 6. In case of a failure, let the user know they will have to do it manually
-     */
+            macroNameToUrl.set(macroName, macroURL);
 
-    /*
-     * proposal for supporting thumbnails
-     * after adding the initial image, load it in JS and, reduce its size and then
-     * use the same tecnique to create another github image. Same for Gifs where we want
-     * to have an image instead with icon of "gif" on top of it.
-     * https://stackoverflow.com/questions/42092640/javascript-how-to-reduce-image-to-specific-file-size
-     * 
-     * reduce size of images: https://jsfiddle.net/qnhmytk4/3/
-     * gid image extraction: https://jsfiddle.net/7gtLtkbw/
-     */
-    
+            getElement(targetId, 'macroSearchInput').value = "";
+            getElement(targetId, 'macrosSection').scrollTop = 0;
+            
+            addMacroToUI(targetId, newMacro, false);                
+        },
+        fail: function() {
+            addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
+        },
+        complete: function() {
+            addingNewMacro = false;
+        }
+    })
 }
 
 initNewTooltip = function(targetId) {
@@ -602,7 +910,7 @@ openTooltip = function(target) {
     } else {
         tooltipMeta = createTooltipMeta(target);
         tooltipsCache.set(target, tooltipMeta);
-        targetIdToTarget.set(tooltipMeta['targetId'], target);
+        targetIdToTarget.set(tooltipMeta['target_id'], target);
     }
     tooltipMeta["tooltip"].open()
 }    
@@ -633,9 +941,9 @@ requestMacroOnPattern = function(target) {
     url.searchParams.append('type', 'get')
     url.searchParams.append('text', macroName)
 
-    $.ajax({
-        url: url,
-        success: function(responseText) {
+    ajaxGet(
+        url,
+        function(responseText) {
             const results = JSON.parse(responseText);
             if (results['data'].length == 0) {
                 macroNameToUrl.set(macroName, null);
@@ -645,7 +953,7 @@ requestMacroOnPattern = function(target) {
                 injectMacroPattern(target, macroName, macroURL);
             }
         },
-    });
+    )
 }
 
 injectMacroPattern = function(target, name, url) {
@@ -669,46 +977,57 @@ injectMacroPattern = function(target, name, url) {
     target.value = value
     target.selectionStart = selectionStart
     target.selectionEnd = selectionStart
+
+    setTimeout(
+        () => {
+            ajaxPost( 
+                "https://us-central1-github-macros.cloudfunctions.net/usage/",
+                {name: name, trigger: gDirectUsageTriggerType},
+            );
+        },
+        0,
+    )
 }
 
 initKeyboardListeners = function() {
     var inputTimerId;
-    document.onkeydown = function(ev) {
-        if (!hostnameToPattern.has(location.hostname)) {
-            return
-        }
-
-        activeElement = document.activeElement
-        // TODO needs to be configured whether we wanna do it also
-        // for regular input + exlusion of our input fields
-        if (!(activeElement instanceof HTMLTextAreaElement)) {
-            return
-        }
-
-        // we open only for ! that is the beginning of a new word
-        if (ev.key === '!') {
-            if (inputTimerId) {
-                clearTimeout(inputTimerId)
+    document.onkeydown = catchAndLog(
+        function(ev) {
+            activeElement = document.activeElement
+            // TODO needs to be configured whether we wanna do it also
+            // for regular input + exlusion of our input fields
+            if (!(activeElement instanceof HTMLTextAreaElement)) {
+                return
             }
-            inputTimerId = setTimeout(
-                () => {
-                    inputTimerId = null;
-                    const text = activeElement.value
-                    const pos = activeElement.selectionStart
-                    if (
-                        text[pos-1] === '!' && // last typed char was !
-                        (pos === 1 || text[pos-2] === ' ' || text[pos-2] === '\n') && // left to the !, it is a new word
-                        (pos === text.length || text[pos] === ' ' || text[pos] === '\n')) { // right to the !, it is a new word
-                        openTooltip(activeElement);
-                    }
-                },
-                250);
-        }
 
-        if (ev.key === '$') {
-            setTimeout(() => requestMacroOnPattern(activeElement), 0)
-        }
-    };
+            // we open only for ! that is the beginning of a new word
+            if (ev.key === '!') {
+                if (inputTimerId) {
+                    clearTimeout(inputTimerId)
+                }
+                inputTimerId = setTimeout(
+                    catchAndLog(
+                        () => {
+                            inputTimerId = null;
+                            const text = activeElement.value
+                            const pos = activeElement.selectionStart
+                            if (
+                                text[pos-1] === '!' && // last typed char was !
+                                (pos === 1 || text[pos-2] === ' ' || text[pos-2] === '\n') && // left to the !, it is a new word
+                                (pos === text.length || text[pos] === ' ' || text[pos] === '\n')) { // right to the !, it is a new word
+                                openTooltip(activeElement);
+                            }
+                        },
+                    ),
+                    250,
+                );
+            }
+
+            if (ev.key === '$') {
+                setTimeout(catchAndLog(() => requestMacroOnPattern(activeElement)), 0)
+            }
+        },
+    );
 }
 
 updateTopUsages = function(macro) {
@@ -716,7 +1035,7 @@ updateTopUsages = function(macro) {
     if (nameToTopUsage.has(macroName)) {
         topUsage = nameToTopUsage.get(macroName);
         topUsage['usages'] = topUsage['usages'] + 1;
-        macroTopUsages.sort(macroTopUsages, (a,b) => {return a['usages'] > b['usages']});
+        macroTopUsages.sort((a,b) => {return a['usages'] > b['usages']});
     } else if (nameToTopUsage.size == maxTopUsagesToStore) {
         topUsageToRemove = macroTopUsages.pop();
         nameToTopUsage.delete(topUsageToRemove['name'])
@@ -726,6 +1045,8 @@ updateTopUsages = function(macro) {
         const newTopUsage = {
             'name': macroName,
             'url': macro['url'],
+            'width': macro['width'],
+            'height': macro['height'],
             'usages': 1,
         }
         macroTopUsages.push(newTopUsage);
@@ -736,37 +1057,39 @@ updateTopUsages = function(macro) {
 }
 
 loadSuggestionsFromStorage = function() {
-    chrome.storage.sync.get(['suggestions', 'suggestions_freshness'], function(items) {
-        if ('top_usages' in items) {
-            macroTopUsages = JSON.parse(items['top_usages'])
-            macroTopUsages.sort(macroTopUsages, (a,b) => {return a['usages'] > b['usages']})
-            for (var i = 0; i < macroTopUsages.length; i++) { 
-                const topUsage = macroTopUsages[i];
-                nameToTopUsage.set(topUsage['name'], topUsage);
-            }
+    chrome.storage.sync.get(
+        ['suggestions', 'suggestions_freshness', 'top_usages'],
+        catchAndLog(
+            function(items) {
+                if (items['top_usages']) {
+                    topUsages = JSON.parse(items['top_usages'])
+                    for (var i = 0; i < topUsages.length; i++) { 
+                        const topUsage = topUsages[i];
+                        nameToTopUsage.set(topUsage['name'], topUsage);
+                    }
 
-            updateCacheWithNewContent('', macroTopUsages.slice(0, numberOfTopUsagesToDisplay), false, true)
-        }
-        
-        if (!('suggestions' in items) || !('suggestions_freshness' in items)) {
-            return;
-        }
+                    macroTopUsages.length = 0;
+                    for (const usage of topUsages) {
+                        macroTopUsages.push(usage)
+                    }
 
-        if (Date.now() - parseInt(items['suggestions_freshness']) > maxSuggestionsFreshnessDuration) {
-            return;
-        }
+                    updateCacheWithNewContent('', macroTopUsages.slice(0, numberOfTopUsagesToDisplay), false, true)
+                }
+                
+                if (!items['suggestions'] || !items['suggestions_freshness']) {
+                    return;
+                }
 
-        if ('suggestions' in items) {
-            content = JSON.parse(items['suggestions'])
-            updateCacheWithNewContent('', content['data'], true, content['has_more']);
-        }
-    });
-}
+                if (Date.now() - parseInt(items['suggestions_freshness']) > maxSuggestionsFreshnessDuration) {
+                    return;
+                }
 
-initSupportedHostNames = function() {
-    // TODO load from storage with a callback to trigger the rest of the init
-    hostnameToPattern.set('github.com', '![$name]($url)');
-    hostnameToPattern.set('gist.github.com', '![$name]($url)');
+                
+                content = JSON.parse(items['suggestions'])
+                updateCacheWithNewContent('', content['data'], true, true);
+            },
+        ),
+    );
 }
 
 // put the macro name (appeared in alt property) as the image's title
@@ -778,14 +1101,10 @@ processGithubMacroImages = function() {
       });
 }
 
-window.onload = function() {
-    initSupportedHostNames();
-
-    if (!hostnameToPattern.has(location.hostname)) {
-        return;
-    }
-
-    initKeyboardListeners();
-    loadSuggestionsFromStorage()
-    processGithubMacroImages();
-}
+window.onload = catchAndLog(
+    function() {
+        initKeyboardListeners();
+        loadSuggestionsFromStorage()
+        processGithubMacroImages();
+    },
+)

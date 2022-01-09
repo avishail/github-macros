@@ -1,4 +1,4 @@
-FROM golang:latest
+FROM golang:1.16
 
 ENV CACHE_BREAKER 1
 ENV DEBIAN_FRONTEND noninteractive
