@@ -3,14 +3,15 @@ package p
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
-	"google.golang.org/api/iterator"
 )
 
 var supportedTypes = map[string]bool{
@@ -20,8 +21,31 @@ var supportedTypes = map[string]bool{
 	"image/jpeg": true,
 }
 
-func isGif(fileType string) bool {
-	return fileType == "image/gif"
+const (
+	Success                 = 0
+	EmptyName               = 1
+	NameContainsSpaces      = 2
+	NameAlreadyExist        = 3
+	EmptyURL                = 4
+	InvalidURL              = 5
+	URLHostnameNotSupported = 6
+	FileIsTooBig            = 7
+	FileFormatNotSupported  = 8
+	TransientError          = 9
+	MissingMandatoryFields  = 10
+	InfraFailure            = 11
+	PermanentError          = 12
+)
+
+type ErrorCode = int
+
+func isGithubMedia(macroURL string) bool {
+	u, err := url.Parse(macroURL)
+	if err != nil {
+		return false
+	}
+
+	return strings.HasSuffix(u.Host, "githubusercontent.com")
 }
 
 func validateFileSizeAndType(fileSize int64, fileType string, maxSize int64) ErrorCode {
@@ -50,10 +74,23 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 	macroURL := r.Form.Get("url")
 	macroOrigURL := r.Form.Get("orig_url")
 
-	errCode := validateNameAndURL(client, macroName, macroURL)
+	if macroOrigURL == "" {
+		macroOrigURL = macroURL
+	}
 
-	if errCode != Success {
+	if errCode := staticNameAndURLValidation(macroName, macroURL); errCode != Success {
 		return nil, errCode
+	}
+
+	isExist, sameOrigURLMacro := queryExistingMacroMetadata(macroName, macroOrigURL, client)
+
+	if isExist {
+		return nil, NameAlreadyExist
+	}
+
+	if sameOrigURLMacro != nil {
+		newMacro := duplicateExistingMacro(client, macroName, sameOrigURLMacro)
+		return newMacro, Success
 	}
 
 	fileSize, fileType, errCode := getFileSizeAndType(macroURL)
@@ -65,39 +102,24 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 		return nil, errCode
 	}
 
-	isGif := isGif(fileType)
+	width, height := getMacroDimensions(macroURL)
 
-	if isGithubMedia(macroURL) {
-		insertNewMacro(client, macroName, macroURL, "", isGif, "", macroOrigURL, fileSize, 0, 0)
+	if !isGithubMedia(macroURL) {
+		macroURL, err = GetGithubImage(client, macroURL)
 
-		newMacro := &MacroRow{
-			Name: macroName,
-			URL:  macroURL,
+		if err != nil {
+			log.Panicf("Failed to create github image '%s': %v", macroURL, err)
 		}
-
-		err := publishNewMacroMessage(macroName)
-
-		if err == nil {
-			return newMacro, Success
-		}
-
-		log.Printf("publishNewMacroMessage failed. retrying: %v", err)
-
-		err = publishNewMacroMessage(macroName)
-
-		if err == nil {
-			return newMacro, Success
-		}
-
-		log.Printf("publishNewMacroMessage failed again. falling back to full flow: %v", err)
 	}
 
-	newMacro, success := postprocessNewMacro(client, macroName, macroURL, fileSize, isGif, true)
-	if !success {
-		log.Panic("failed to run postprocessNewMacro")
-	}
+	insertNewMacro(client, macroName, macroURL, macroOrigURL, fileSize, width, height)
 
-	return newMacro, Success
+	return &MacroRow{
+		Name:   macroName,
+		URL:    macroURL,
+		Width:  width,
+		Height: height,
+	}, Success
 }
 
 func getFileSizeAndType(macroURL string) (fileSize int64, fileType string, errCode ErrorCode) {
@@ -134,7 +156,7 @@ func getFileSizeAndType(macroURL string) (fileSize int64, fileType string, errCo
 	return fileSize, fileType, Success
 }
 
-func validateNameAndURL(client *bigquery.Client, macroName, macroURL string) ErrorCode {
+func staticNameAndURLValidation(macroName, macroURL string) ErrorCode {
 	if macroName == "" {
 		return EmptyName
 	}
@@ -145,12 +167,6 @@ func validateNameAndURL(client *bigquery.Client, macroName, macroURL string) Err
 
 	if strings.Contains(macroName, " ") {
 		return NameContainsSpaces
-	}
-
-	isExist := isMacroExist(macroName, client)
-
-	if isExist {
-		return NameAlreadyExist
 	}
 
 	return Success
@@ -181,35 +197,36 @@ func getFileSize(r *http.Response) int64 {
 	return r.ContentLength
 }
 
-func isMacroExist(name string, client *bigquery.Client) bool {
+func queryExistingMacroMetadata(name, origURL string, client *bigquery.Client) (bool, *MacroRow) {
 	query := client.Query(
-		"SELECT 1 FROM `github-macros.macros.macros` WHERE name=@name",
+		"SELECT * FROM github-macros.macros.macros WHERE name=@name OR orig_url=@orig_url",
 	)
 	query.Parameters = []bigquery.QueryParameter{
 		{
 			Name:  "name",
 			Value: name,
 		},
+		{
+			Name:  "orig_url",
+			Value: origURL,
+		},
 	}
 
-	ctx := context.Background()
+	results := getQueryResults(query)
 
-	iter, err := runQuery(ctx, query)
+	var sameOrigURL *MacroRow
 
-	if err != nil {
-		log.Panicf("failed to check if name already exist: %v", err)
+	for _, res := range results {
+		if res.Name == name {
+			return true, nil
+		}
+
+		if res.OrigURL == origURL {
+			sameOrigURL = res
+		}
 	}
 
-	type Row struct{}
-
-	var r Row
-	err = iter.Next(&r)
-
-	if err != nil && err != iterator.Done {
-		log.Panicf("failed to read query results: %v", err)
-	}
-
-	return iter.TotalRows > 0
+	return false, sameOrigURL
 }
 
 func Add(w http.ResponseWriter, r *http.Request) {
@@ -246,4 +263,90 @@ func Add(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Panicf("error writing response: %v", err)
 	}
+}
+
+func getMacroDimensions(macroURL string) (width, height int64) {
+	config, err := getImageConfig(macroURL)
+	if err != nil {
+		log.Panicf("getMacroDimensions: %v", err)
+	}
+
+	return int64(config.Width), int64(config.Height)
+}
+
+func getErrorCodeResponse(errCode ErrorCode) (string, error) {
+	return getRespons(
+		map[string]interface{}{
+			"code": errCode,
+		},
+	)
+}
+
+func getRespons(responseMap map[string]interface{}) (string, error) {
+	response, err := json.Marshal(responseMap)
+
+	if err != nil {
+		return "", fmt.Errorf("error while marshaling response: %v", err)
+	}
+
+	return string(response), nil
+}
+
+func insertNewMacro(
+	client *bigquery.Client,
+	macroName, macroURL, origURL string,
+	macroSize, width, height int64,
+) {
+	query := client.Query(`
+		INSERT INTO github-macros.macros.macros 
+		(name, orig_url, url, url_size, width, height)
+		VALUES (@name, @orig_url, @url, @url_size, @width, @height)
+	`)
+	query.Parameters = []bigquery.QueryParameter{
+		{
+			Name:  "name",
+			Value: macroName,
+		},
+		{
+			Name:  "url",
+			Value: macroURL,
+		},
+		{
+			Name:  "orig_url",
+			Value: origURL,
+		},
+		{
+			Name:  "url_size",
+			Value: macroSize,
+		},
+		{
+			Name:  "width",
+			Value: width,
+		},
+		{
+			Name:  "height",
+			Value: height,
+		},
+	}
+
+	if _, err := runQuery(context.Background(), query); err != nil {
+		log.Panicf("failed to insert new macro: %v", err)
+	}
+}
+
+func duplicateExistingMacro(client *bigquery.Client, macroName string, macroToDuplicate *MacroRow) *MacroRow {
+	insertNewMacro(
+		client,
+		macroName,
+		macroToDuplicate.URL,
+		macroToDuplicate.OrigURL,
+		macroToDuplicate.URLSize,
+		macroToDuplicate.Width,
+		macroToDuplicate.Height,
+	)
+
+	var newMacro = *macroToDuplicate
+	newMacro.Name = macroName
+
+	return &newMacro
 }

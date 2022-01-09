@@ -10,6 +10,11 @@ import (
 	"cloud.google.com/go/bigquery"
 )
 
+const (
+	cErrorTypeJS  = "js"
+	cErrorTypeNet = "net"
+)
+
 func saveLog(r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		log.Panicf("error while parsing form: %v", err)
@@ -23,19 +28,23 @@ func saveLog(r *http.Request) {
 	defer client.Close()
 
 	version := r.Form.Get("version")
-	stacktrace := r.Form.Get("stacktrace")
-
 	if version == "" {
 		log.Panic("missing version parameter")
 	}
 
+	stacktrace := r.Form.Get("stacktrace")
 	if stacktrace == "" {
 		log.Panic("missing stacktrace parameter")
 	}
 
+	errType := r.Form.Get("type")
+	if errType != cErrorTypeJS && errType != cErrorTypeNet {
+		log.Panic("missing or wrong type parameter")
+	}
+
 	query := client.Query(`
-		INSERT INTO github-macros.macros.client_errors (id, client_version, stacktrace, timestamp) 
-		VALUES (GENERATE_UUID(), @client_version, @stacktrace, CURRENT_TIMESTAMP())
+		INSERT INTO github-macros.macros.client_errors (id, client_version, type, stacktrace, timestamp) 
+		VALUES (GENERATE_UUID(), @client_version, @error_type, @stacktrace, CURRENT_TIMESTAMP())
 	`)
 	query.Parameters = []bigquery.QueryParameter{
 		{
@@ -43,8 +52,16 @@ func saveLog(r *http.Request) {
 			Value: version,
 		},
 		{
+			Name:  "error_type",
+			Value: errType,
+		},
+		{
 			Name:  "stacktrace",
 			Value: stacktrace,
+		},
+		{
+			Name:  "type",
+			Value: errType,
 		},
 	}
 
@@ -55,7 +72,7 @@ func saveLog(r *http.Request) {
 	}
 }
 
-func ClientErrors(w http.ResponseWriter, r *http.Request) {
+func ClientError(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Access-Control-Allow-Origin", "*")
 
 	saveLog(r)

@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/bigquery"
 	"github.com/avishail/github-macros/server/p"
@@ -50,7 +52,7 @@ func testGetQuery() {
 func testSuggestionQuery() {
 	r := &http.Request{
 		URL: &url.URL{
-			RawQuery: "type=suggestion",
+			RawQuery: "?type=suggestion&page=0",
 		},
 	}
 
@@ -68,11 +70,12 @@ func testSuggestionQuery() {
 // }
 
 func testAddMutation() {
+	t := time.Now().Unix()
 	r := &http.Request{
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"name=magic&url=https://c.tenor.com/wn2_Qq6flogAAAAM/magical-magic.gif",
+				"name=battleshipit&url=https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg",
 			),
 		),
 		Header: http.Header{
@@ -81,6 +84,7 @@ func testAddMutation() {
 	}
 
 	p.Add(&ResponseWriter{}, r)
+	fmt.Println("Total time: ", time.Now().Unix()-t)
 }
 
 func testUsage() {
@@ -88,7 +92,7 @@ func testUsage() {
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"name=nonono",
+				"name=magic",
 			),
 		),
 		Header: http.Header{
@@ -99,13 +103,12 @@ func testUsage() {
 	p.Usage(&ResponseWriter{}, r)
 }
 
-/*
 func testReportMutation() {
 	r := &http.Request{
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"type=report&name=blabla",
+				"name=magic",
 			),
 		),
 		Header: http.Header{
@@ -113,9 +116,8 @@ func testReportMutation() {
 		},
 	}
 
-	p.Mutate(&ResponseWriter{}, r)
+	p.Report(&ResponseWriter{}, r)
 }
-*/
 
 func runQuery(ctx context.Context, query *bigquery.Query) (*bigquery.RowIterator, error) {
 	job, err := query.Run(ctx)
@@ -142,15 +144,25 @@ func runQuery(ctx context.Context, query *bigquery.Query) (*bigquery.RowIterator
 }
 
 func main() {
-	// m := map[string]interface{}{}
-
-	// a, _ := m["a"].(float64)
-	// fmt.Println(a)
-
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+
+	// f, err := os.Open("/workspaces/github-macros/server/test.jpeg")
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// defer f.Close()
+	// co, er := jpeg.DecodeConfig(f)
+	// fmt.Println(co, er)
+
+	// image, tt, err := image.DecodeConfig(f)
+	// fmt.Println(err)
+	// fmt.Println(tt)
+	// fmt.Println(image)
+
+	// testSuggestionQuery()
 
 	// p.PublishNewMacroMessage("macroName123")
 
@@ -159,7 +171,7 @@ func main() {
 	//testSearchQuery()
 	//testGetQuery()
 	//testSuggestionQuery()
-
+	// testUsage()
 	testAddMutation()
 	//testUsage()
 	//testReportMutation()
@@ -174,11 +186,8 @@ func main() {
 	// defer client.Close()
 
 	// query := client.Query(`
-	// 	INSERT INTO github-macros.macros.reports (macro_name, reports)
-	// 	SELECT @macro_name, 0 FROM (SELECT 1)
-	// 	LEFT JOIN github-macros.macros.reports
-	// 	ON macro_name = @macro_name
-	// 	WHERE macro_name IS NULL
+	// 	INSERT INTO github-macros.macros.reports (macro_name, reports) VALUES ("abc", 0);
+	// 	INSERT INTO github-macros.macros.reports (macro_name, reports) VALUES ("def", 0);
 	// `)
 	// query.Parameters = []bigquery.QueryParameter{
 	// 	{

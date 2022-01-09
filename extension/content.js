@@ -1,11 +1,9 @@
 /*
-    TODO
-    2. keep track of the last 100 usages, store it in local storage, load it during boot and place the top X 
-       need to see how we make sure we will know how to load more suggestions nicely
-       with top usages - DONE but needs to be tested
-    4. fetch and show small footer from the server? Ask Sivan
-    5. test load more
+
+1. test load more
+
 */
+
 
 class ErrorCodes {
     static Success = 0
@@ -43,20 +41,82 @@ const gPlusIconSrc = chrome.runtime.getURL('img/icons/plus-4x.png');
 const gXIconSrc = chrome.runtime.getURL('img/icons/x-4x.png');
 const gVIconSrc = chrome.runtime.getURL('img/icons/v-4x.png');
 
-closeTooltipOnClickOutside = true;
+const gJavascriptErrorType = "js"
+const gNetworkErrorType = "net"
+
+const gDirectUsageTriggerType = 'direct'
+const gClickUsageTriggerType = 'click'
+
+
+reportClientError = function(type, stacktrace) {
+    $.post( 
+        "https://us-central1-github-macros.cloudfunctions.net/client_error/",
+        { version: gVersion, type: type, stacktrace: stacktrace},
+    );
+}
 
 catchAndLog = function(f) {
     return function() {
         try {
             return f.apply(this, arguments);
         } catch (e) {
-            $.post( 
-                "https://us-central1-github-macros.cloudfunctions.net/client_errors/",
-                { version: gVersion, stacktrace: e.stack},
-            );
+            reportClientError(gJavascriptErrorType, e.stack);
             console.log(e.stack)
         }
     }
+}
+
+ajax = function(settings) {
+    settings = { ...settings };
+
+    if (settings['success']) {
+        settings['success'] =  catchAndLog(settings['success']);
+    }
+
+    const origFailCallback = settings['fail'];
+
+    settings['fail'] = function(request, status, error) {
+        if (origFailCallback) {
+            catchAndLog(origFailCallback)()
+        }
+        reportClientError(
+            gNetworkErrorType,
+            JSON.stringify(
+                {
+                    url: settings['url'],
+                    status: status,
+                    error: error,
+                    content: request.responseText,
+                }
+            ),
+        )
+    }
+
+    if (settings['complete']) {
+        settings['complete'] = catchAndLog(settings['complete']);
+    }
+
+    catchAndLog(() => $.ajax(settings))()
+}
+
+ajaxGet = function(url, success) {
+    ajax(
+        {
+            url: url,
+            success: success,
+        },
+    )
+}
+
+ajaxPost = function(url, data, success) {
+    ajax(
+        {
+            url: url,
+            type: 'POST',
+            data: data, 
+            success: success,
+        },
+    )
 }
 
 getElement = function(targetId, id) {
@@ -165,9 +225,9 @@ selectMacro = function(targetId, macro) {
         catchAndLog(
             () => {
                 updateTopUsages(macro);
-                $.post( 
+                ajaxPost( 
                     "https://us-central1-github-macros.cloudfunctions.net/usage/",
-                    {name: macro["name"] },
+                    {name: macro["name"], trigger: gClickUsageTriggerType},
                 );
             }
         ),
@@ -201,32 +261,20 @@ fetchContent = function(targetId, searchText, pageToFetch, onFinishCallback, onE
         url.searchParams.append('page', pageToFetch)
     }
 
-    $.ajax({
+    ajax({
         url: url,
-        success: catchAndLog(
-            function(responseText) {
-                results = JSON.parse(responseText);
-                onFinishCallback(results);
-                // if ('system_message' in results) {
-                //     processSystemMessage(results['system_message']);
-                // }
-                processSystemMessage(
-                    {
-                        'id': 'sR5td3-43',
-                        'snooze_time': 60 * 60 * 24,
-                        'total_impressions': 3,
-                        'content': 'This is a system message!!!',
-                    }
-                )
-            },
-        ),    
-        error: catchAndLog(
-            function() {
-                if (onErrorCallback) {
-                    onErrorCallback();
-                }
-            },
-        ),    
+        success: function(responseText) {
+            results = JSON.parse(responseText);
+            onFinishCallback(results);
+            if ('system_message' in results) {
+                processSystemMessage(results['system_message']);
+            }
+        },
+        error: function() {
+            if (onErrorCallback) {
+                onErrorCallback();
+            }
+        },
     });
 }
 
@@ -257,78 +305,91 @@ updateCacheWithNewContent = function(searchText, items, isRealPage, hasMore) {
 createSingleMacro = function(targetId, item) {
     const div = document.createElement('div');
     div.style.width = '100%';
+    div.style.aspectRatio = (item['width']/item['height']);
+    div.style.overflow = 'auto';
     div.style.marginTop = '5px';
     div.style.marginBottom = '5px';
     div.style.borderRadius = '5px';
+    div.style.borderStyle = 'solid';
+    div.style.borderWidth = '1px';
+    div.style.borderColor = '#234C87';
+    
     div.style.position = 'relative';
     div.onclick = function() {selectMacro(targetId, item);};
 
+    const spinnerWrapper = document.createElement('div');
+    spinnerWrapper.style.display = 'flex';
+    spinnerWrapper.style.width = '100%';
+    spinnerWrapper.style.height = '100%';
+    spinnerWrapper.style.position = 'absolute';
+    spinnerWrapper.style.justifyContent = 'center';
+    spinnerWrapper.style.alignItems = 'center';
+
+
+    const spinner = document.createElement('div');
+    spinner.classList.add("gh-macros-loader");
+    spinner.classList.add("gh-macros-dark-loader");
+    spinner.style.width = '10px';
+    spinner.style.height = '10px';
+    spinner.style.fontSize = '1px';
+    
+    spinnerWrapper.appendChild(spinner);
+    div.appendChild(spinnerWrapper);
+
     const image = document.createElement('img');
     image.style.width = '100%';
-    image.src = item['thumbnail'] || item['gif_thumbnail'] || item['url'];
+    image.style.height = '100%';
+    image.src = item['url'];
     image.title = item['name'];
     image.style.display = 'block';
     image.onerror = function () {
         div.parentElement.removeChild(div);
-        $.post( "https://us-central1-github-macros.cloudfunctions.net/report/", { name: item["name"] } );
+        ajaxPost(
+            "https://us-central1-github-macros.cloudfunctions.net/report/", 
+            { name: item["name"] },
+        );
     };
+    image.onload = function () {
+        spinnerWrapper.parentElement.removeChild(spinnerWrapper); 
+    }
 
     div.appendChild(image)
-
-    const gifDiv = document.createElement('div');
-    const gifIcon = document.createElement('img');
-    if (item['is_gif'] && item['thumbnail']) {
-        gifDiv.style.position = 'absolute';
-        gifDiv.style.width = '100%';
-        gifDiv.style.height = '100%';
-        gifDiv.style.top = 0;
-        gifDiv.style.left = 0;
-        gifDiv.style.display = 'flex';
-        gifDiv.style.justifyContent = 'center';
-        gifDiv.style.alignItems = 'center';
-
-        gifIcon.src = gGifIconSrc;
-        gifIcon.style.width = '30px';
-        gifIcon.style.aspectRatio = '1.32';
-
-        gifDiv.appendChild(gifIcon);
-
-        div.appendChild(gifDiv)
-    }
-
-    if (item['is_gif'] && item['thumbnail']) {
-        gifDiv.onmouseenter = function() {
-            gifIcon.style.visibility = 'hidden';
-            image.src = item['gif_thumbnail'] || item['url'];
-
-        }
-
-        gifDiv.onmouseleave = function() {
-            gifIcon.style.visibility = 'visible';
-            image.src = item['thumbnail'];
-        }
-    }
 
     return div
 }
 
-updateUIWithContent = function (targetId, content, isFirstPage) {
-    leftMacroDiv = getElement(targetId, 'leftMacros');
-    rightMacroDiv = getElement(targetId, 'rightMacros');
+addMacroToUI = function(targetId, macro) {
+    meta = tooltipsCache.get(targetIdToTarget.get(targetId))
 
+    var div;
+    if (meta['left_height'] <= meta['right_height']) {
+        div = getElement(targetId, 'leftMacros');
+        meta['left_height'] += macro['height'];
+    } else {
+        div = getElement(targetId, 'rightMacros');
+        meta['right_height'] += macro['height'];
+    }
+
+    div.appendChild(createSingleMacro(targetId, macro));
+}
+
+clearAllMacrosFromUI = function(targetId) {
+    leftMacroDiv = getElement(targetId, 'leftMacros').innerHTML = '';
+    rightMacroDiv = getElement(targetId, 'rightMacros').innerHTML = '';
+    meta = tooltipsCache.get(targetIdToTarget.get(targetId))
+    meta['left_height'] = 0
+    meta['right_height'] = 0
+}
+
+updateUIWithContent = function (targetId, content, isFirstPage) {
     if (isFirstPage) {
-        leftMacroDiv.innerHTML = '';
-        rightMacroDiv.innerHTML = '';                            
+        clearAllMacrosFromUI(targetId);
     }
 
     getElement(targetId, 'moreResultsSpinner').style.display = content['has_more'] ? 'inline' : 'none';
-
-    let divs = rightMacroDiv.childElementCount >= leftMacroDiv.childElementCount 
-        ? [leftMacroDiv, rightMacroDiv] 
-        : [rightMacroDiv, leftMacroDiv];
     const items = content['data'];
     for (var i = 0; i < items.length; i++) {
-        divs[i % 2].appendChild(createSingleMacro(targetId, items[i]));
+        addMacroToUI(targetId, items[i]);
     }
 }
 
@@ -497,7 +558,7 @@ createTooltip = function(targetId, target) {
                         </div> 
                         <div id="${idPrefix}addNewMacroSuccess" style="display: none;flex-direction: column;width: 100%;height: 100%;align-items: center;justify-content: center;">
                             <img src="${gVIconSrc}" style="width: 34px;height: 25px;">
-                            <text style="font-family: 'Pragati Narrow';font-weight: 400;font-size: 16px;color: white;user-select: none;margin: 20;text-align: center;">It was added succesfully to the pile and you can start using it! Thanks for contributing :)</text>
+                            <text style="font-family: 'Pragati Narrow';font-weight: 400;font-size: 16px;color: white;user-select: none;margin: 20;text-align: center;">It was added succesfully to the pile and it will remain as long as the original image remains accessible. Thanks for contributing :)</text>
                         </div>   
                     </div>  
                 </div>
@@ -535,6 +596,8 @@ createTooltipMeta = function(target) {
     const newTooltipMeta = {
         'target_id': targetId,
         'tooltip': tooltip,
+        'left_height': 0,
+        'right_height': 0,
     };
 
     return newTooltipMeta
@@ -543,8 +606,7 @@ createTooltipMeta = function(target) {
 handleCloseTooltip = function(targetId) {
     getElement(targetId, 'macroSearchInput').value = '';
     hideSearchSpinner(targetId);
-    getElement(targetId, 'leftMacros').innerHTML = '';
-    getElement(targetId, 'rightMacros').innerHTML = '';
+    clearAllMacrosFromUI(targetId);
     getElement(targetId, 'moreResultsSpinner').style.display = 'inline';
     hideAddMacroUI(targetId);
     dismissSystemMessage(targetId, null, false);
@@ -649,7 +711,7 @@ processSystemMessage = function(systemMessage) {
         ['system_message'],
         catchAndLog(
             function(items) {
-                const prevSystemMessage = ('system_message' in items) ? JSON.parse(items['system_message']) : {'number_of_impressions': 0}
+                const prevSystemMessage = (items['system_message']) ? JSON.parse(items['system_message']) : {'number_of_impressions': 0}
                 if (prevSystemMessage['id'] === systemMessage['id']) {
                     return;
                 }
@@ -672,7 +734,7 @@ maybeShowSystemMessage = function(targetId) {
         ['system_message'],
         catchAndLog(
             function(items) {
-                if (!('system_message' in items)) {
+                if (!items['system_message']) {
                     return
                 }
                 
@@ -804,51 +866,46 @@ addNewMacro = function(targetId) {
     }
 
     fireAddNewMacroRequest = (url, origURL) => {
-        $.post(
-            "https://us-central1-github-macros.cloudfunctions.net/add/",
-            { 
+        ajax({
+            url: "https://us-central1-github-macros.cloudfunctions.net/add/",
+            type: 'POST',
+            data: { 
                 name: macroName,
                 url: url,
                 orig_url: origURL,
             },
-            catchAndLog(
-                (responseText) => {
-                    const response = JSON.parse(responseText);
-                    if (response['code'] != ErrorCodes.Success) {
-                        addNewMacroShowErrorMessage(targetId, response['code']); 
-                        return
-                    }
-    
-                    addNewMacroShowSuccessMessage(targetId);
-    
-                    const newMacro = response['data'];
-    
-                    macroNameToUrl.set(macroName, macroURL);
-    
-                    getElement(targetId, 'macroSearchInput').value = "";
-                    getElement(targetId, 'macrosSection').scrollTop = 0;
-                    getElement(targetId, 'leftMacros').prepend(
-                        createSingleMacro(
-                            targetId,
-                            newMacro,
-                        ),
-                    )
-                    
-                },
-            ),
-        ).fail(
-            catchAndLog(
-                () => {
-                    addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
-                },
-            ),
-        ).always(catchAndLog(() => {addingNewMacro = false;})); 
+            success: function(responseText) {
+                const response = JSON.parse(responseText);
+                if (response['code'] != ErrorCodes.Success) {
+                    addNewMacroShowErrorMessage(targetId, response['code']); 
+                    return
+                }
+
+                addNewMacroShowSuccessMessage(targetId);
+
+                const newMacro = response['data'];
+
+                macroNameToUrl.set(macroName, macroURL);
+
+                getElement(targetId, 'macroSearchInput').value = "";
+                getElement(targetId, 'macrosSection').scrollTop = 0;
+                
+                addMacroToUI(targetId, newMacro);                
+            },
+            fail: function() {
+                addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
+            },
+            complete: function() {
+                addingNewMacro = false;
+            }
+        })
     }
 
     addingNewMacro = true;
 
     if (isGitHubMediaLink(macroURL)) {
         fireAddNewMacroRequest(macroURL);
+        return;
     }
 
     const authToken = $("input[type='hidden'][data-csrf='true'][class='js-data-preview-url-csrf']" )[0]
@@ -858,28 +915,24 @@ addNewMacro = function(targetId) {
 
     const boundary = "----WebKitFormBoundary" + makeid(16)
 
-    $.ajax({
+    ajax({
         url: 'https://github.com/preview',
         type: 'POST',
         data: `--${boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n![github-macros-new-url](${macroURL})\r\n--${boundary}\r\nContent-Disposition: form-data; name=\"authenticity_token\"\r\n\r\n${authToken.value}\r\n--${boundary}--\r\n`,
         headers: {
             "content-type": `multipart/form-data; boundary=${boundary}`,
         },
-        success: catchAndLog(
-            function (data) {
-                const responseImage = $($.parseHTML(data)).find('img')[0]
-                if (!responseImage || !responseImage.src) {
-                    fireAddNewMacroRequest(macroURL);    
-                } else {
-                    fireAddNewMacroRequest(responseImage.src, macroURL)
-                }
-            },
-        ),
-        fail: catchAndLog(
-            function() {
-                fireAddNewMacroRequest(macroURL)
-            },
-        ),
+        success: function (data) {
+            const responseImage = $($.parseHTML(data)).find('img')[0]
+            if (!responseImage || !responseImage.src) {
+                fireAddNewMacroRequest(macroURL);    
+            } else {
+                fireAddNewMacroRequest(responseImage.src, macroURL)
+            }
+        },
+        fail: function() {
+            fireAddNewMacroRequest(macroURL)
+        },
     });     
 }
 
@@ -927,21 +980,19 @@ requestMacroOnPattern = function(target) {
     url.searchParams.append('type', 'get')
     url.searchParams.append('text', macroName)
 
-    $.ajax({
-        url: url,
-        success: catchAndLog(
-            function(responseText) {
-                const results = JSON.parse(responseText);
-                if (results['data'].length == 0) {
-                    macroNameToUrl.set(macroName, null);
-                } else {
-                    macroURL = results['data'][0]['url'];
-                    macroNameToUrl.set(macroName, macroURL);
-                    injectMacroPattern(target, macroName, macroURL);
-                }
-            },
-        ),    
-    });
+    ajaxGet(
+        url,
+        function(responseText) {
+            const results = JSON.parse(responseText);
+            if (results['data'].length == 0) {
+                macroNameToUrl.set(macroName, null);
+            } else {
+                macroURL = results['data'][0]['url'];
+                macroNameToUrl.set(macroName, macroURL);
+                injectMacroPattern(target, macroName, macroURL);
+            }
+        },
+    )
 }
 
 injectMacroPattern = function(target, name, url) {
@@ -965,6 +1016,16 @@ injectMacroPattern = function(target, name, url) {
     target.value = value
     target.selectionStart = selectionStart
     target.selectionEnd = selectionStart
+
+    setTimeout(
+        () => {
+            ajaxPost( 
+                "https://us-central1-github-macros.cloudfunctions.net/usage/",
+                {name: name, trigger: gDirectUsageTriggerType},
+            );
+        },
+        0,
+    )
 }
 
 initKeyboardListeners = function() {
@@ -1044,7 +1105,7 @@ loadSuggestionsFromStorage = function() {
         ['suggestions', 'suggestions_freshness', 'top_usages'],
         catchAndLog(
             function(items) {
-                if ('top_usages' in items) {
+                if (items['top_usages']) {
                     topUsages = JSON.parse(items['top_usages'])
                     for (var i = 0; i < topUsages.length; i++) { 
                         const topUsage = topUsages[i];
@@ -1059,7 +1120,7 @@ loadSuggestionsFromStorage = function() {
                     updateCacheWithNewContent('', macroTopUsages.slice(0, numberOfTopUsagesToDisplay), false, true)
                 }
                 
-                if (!('suggestions' in items) || !('suggestions_freshness' in items)) {
+                if (!items['suggestions'] || !items['suggestions_freshness']) {
                     return;
                 }
 
@@ -1103,40 +1164,3 @@ window.onload = catchAndLog(
         processGithubMacroImages();
     },
 )
-
-/*
-
-HOW TO REDUCE ADD TIME BY 60%
-
-1. locate a hidden input contains the auth key in the HTML
-<input type="hidden" value="secret-value" data-csrf="true" class="js-data-preview-url-csrf">
-
-$( "input[type='hidden'][data-csrf='true'][class='js-data-preview-url-csrf']" ).next()
-
-2. send and HTTP POST request:
-
-fetch("https://github.com/preview", {
-  "headers": {
-    "content-type": "multipart/form-data; boundary=----WebKitFormBoundaryiKeP7DQBTsft34cT",
-  },
-  "body": "------WebKitFormBoundaryiKeP7DQBTsft34cT\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n![github-macros-shipit](https://camo.githubusercontent.com/17d003fb9b66b81d64d7a25942b0c747be31f157560b322ede8666f51661a858/68747470733a2f2f6d65646961322e67697068792e636f6d2f6d656469612f764d4e6f4b4b7a6e4f72554a692f67697068792e6769663f6369643d373930623736313136326533613935316636343130613936613937333436613031626564373330393639656465636463267269643d67697068792e6769662663743d67)\r\n------WebKitFormBoundaryiKeP7DQBTsft34cT\r\nContent-Disposition: form-data; name=\"authenticity_token\"\r\n\r\nxoRGdHvHRV7g/n5AuFSX+xpljd5BS43HluJRVGcK4c02kyCKi8nZgcm9ffJPsaNV23iaOEnfy6bJihBfXoA27w==\r\n------WebKitFormBoundaryiKeP7DQBTsft34cT--\r\n",
-  "method": "POST",
-});
-
-3. process the response and extract the URL
-
-At "add" cloud function
-
-1. if the provided URL is github's, do the basic validations (name not taken, url is valid, file type is valid)
-   then insert it to the DB and return a partial response to the client. Without thumbnail or gif_thumbnail
-   then, trigger another cloud function that will do all the post processing of recreating the real
-   metadata
-
-2. if the provided URL is not github's, the post processing should only create the new reports and usages intries
-
-
-
-
-donations: https://carlosbecker.com/donate/
-https://www.buymeacoffee.com/
-*/

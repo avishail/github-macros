@@ -33,7 +33,12 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 	case queryTypeSearch:
 		log.Printf("search: %s, offset: %v", queryText, offset)
 		query = client.Query(`
-			SELECT name, url, thumbnail, is_gif, gif_thumbnail, CASE WHEN Usages.usages is NULL THEN 0 ELSE Usages.usages END as usages 
+			SELECT 
+				name,
+				url,
+				width,
+				height,
+				(CASE WHEN Usages.clicks is NULL THEN 0 ELSE Usages.clicks END) + (CASE WHEN Usages.directs is NULL THEN 0 ELSE Usages.directs END) as usages,
 			FROM github-macros.macros.macros Macros
 			LEFT JOIN github-macros.macros.usages Usages
 			ON Macros.name = Usages.macro_name
@@ -58,7 +63,7 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		}
 	case queryTypeGet:
 		log.Printf("get: %s", queryText)
-		query = client.Query("SELECT name, url, thumbnail, is_gif, gif_thumbnail FROM `github-macros.macros.macros` WHERE name=@name")
+		query = client.Query("SELECT name, url, width, height FROM `github-macros.macros.macros` WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "name",
@@ -68,7 +73,12 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 	case "", queryTypeSuggestion:
 		log.Printf("suggestion: offset: %v", offset)
 		query = client.Query(`
-			SELECT name, url, thumbnail, is_gif, gif_thumbnail, CASE WHEN Usages.usages is NULL THEN 0 ELSE Usages.usages END as usages
+			SELECT
+				name,
+				url,
+				width,
+				height,
+				(CASE WHEN Usages.clicks is NULL THEN 0 ELSE Usages.clicks END) + (CASE WHEN Usages.directs is NULL THEN 0 ELSE Usages.directs END) as usages
 			FROM github-macros.macros.macros Macros
 			LEFT JOIN github-macros.macros.usages Usages
 			ON Macros.name = Usages.macro_name

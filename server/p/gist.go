@@ -181,49 +181,32 @@ func getGist(gistID string) ([]byte, error) {
 	return resp, nil
 }
 
-func GetGithubImages(client *bigquery.Client, imagesURL []string) (map[string]string, error) {
+func GetGithubImage(client *bigquery.Client, imageURL string) (string, error) {
 	gistID, err := getGistID(client)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	payload := ""
-
-	altToIndex := make(map[string]int)
-
-	for i, imageURL := range imagesURL {
-		altToIndex[fmt.Sprintf("ghm_%d", i)] = i
-		payload += fmt.Sprintf("![ghm_%d](%s)", i, imageURL)
-	}
-
-	commentID, err := commentOnGist(client, gistID, payload)
+	commentID, err := commentOnGist(client, gistID, fmt.Sprintf("![ghm](%s)", imageURL))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	gist, err := getGist(gistID)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(gist))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	githubImages := make(map[string]string)
+	var githubImage string
 
 	doc.Find(fmt.Sprintf("#gistcomment-%d img", commentID)).Each(func(i int, s *goquery.Selection) {
-		alt, _ := s.Attr("alt")
-
-		index, ok := altToIndex[alt]
-		if !ok {
-			return
-		}
-
-		src, _ := s.Attr("src")
-		githubImages[imagesURL[index]] = src
+		githubImage, _ = s.Attr("src")
 	})
 
-	return githubImages, nil
+	return githubImage, nil
 }
