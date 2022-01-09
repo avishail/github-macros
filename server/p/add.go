@@ -72,24 +72,19 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 
 	macroName := r.Form.Get("name")
 	macroURL := r.Form.Get("url")
-	macroOrigURL := r.Form.Get("orig_url")
-
-	if macroOrigURL == "" {
-		macroOrigURL = macroURL
-	}
 
 	if errCode := staticNameAndURLValidation(macroName, macroURL); errCode != Success {
 		return nil, errCode
 	}
 
-	isExist, sameOrigURLMacro := queryExistingMacroMetadata(macroName, macroOrigURL, client)
+	isExist, sameURLMacro := queryExistingMacroMetadata(macroName, macroURL, client)
 
 	if isExist {
 		return nil, NameAlreadyExist
 	}
 
-	if sameOrigURLMacro != nil {
-		newMacro := duplicateExistingMacro(client, macroName, sameOrigURLMacro)
+	if sameURLMacro != nil {
+		newMacro := duplicateExistingMacro(client, macroName, sameURLMacro)
 		return newMacro, Success
 	}
 
@@ -104,15 +99,7 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 
 	width, height := getMacroDimensions(macroURL)
 
-	if !isGithubMedia(macroURL) {
-		macroURL, err = GetGithubImage(client, macroURL)
-
-		if err != nil {
-			log.Panicf("Failed to create github image '%s': %v", macroURL, err)
-		}
-	}
-
-	insertNewMacro(client, macroName, macroURL, macroOrigURL, fileSize, width, height)
+	insertNewMacro(client, macroName, macroURL, fileSize, width, height)
 
 	return &MacroRow{
 		Name:   macroName,
@@ -197,36 +184,36 @@ func getFileSize(r *http.Response) int64 {
 	return r.ContentLength
 }
 
-func queryExistingMacroMetadata(name, origURL string, client *bigquery.Client) (bool, *MacroRow) {
+func queryExistingMacroMetadata(macroName, macroURL string, client *bigquery.Client) (bool, *MacroRow) {
 	query := client.Query(
-		"SELECT * FROM github-macros.macros.macros WHERE name=@name OR orig_url=@orig_url",
+		"SELECT * FROM github-macros.macros.macros WHERE name=@name OR url=@url",
 	)
 	query.Parameters = []bigquery.QueryParameter{
 		{
 			Name:  "name",
-			Value: name,
+			Value: macroName,
 		},
 		{
-			Name:  "orig_url",
-			Value: origURL,
+			Name:  "url",
+			Value: macroURL,
 		},
 	}
 
 	results := getQueryResults(query)
 
-	var sameOrigURL *MacroRow
+	var sameURL *MacroRow
 
 	for _, res := range results {
-		if res.Name == name {
+		if res.Name == macroName {
 			return true, nil
 		}
 
-		if res.OrigURL == origURL {
-			sameOrigURL = res
+		if res.URL == macroURL {
+			sameURL = res
 		}
 	}
 
-	return false, sameOrigURL
+	return false, sameURL
 }
 
 func Add(w http.ResponseWriter, r *http.Request) {
@@ -294,13 +281,13 @@ func getRespons(responseMap map[string]interface{}) (string, error) {
 
 func insertNewMacro(
 	client *bigquery.Client,
-	macroName, macroURL, origURL string,
+	macroName, macroURL string,
 	macroSize, width, height int64,
 ) {
 	query := client.Query(`
 		INSERT INTO github-macros.macros.macros 
-		(name, orig_url, url, url_size, width, height)
-		VALUES (@name, @orig_url, @url, @url_size, @width, @height)
+		(name, url, url_size, width, height)
+		VALUES (@name, @url, @url_size, @width, @height)
 	`)
 	query.Parameters = []bigquery.QueryParameter{
 		{
@@ -310,10 +297,6 @@ func insertNewMacro(
 		{
 			Name:  "url",
 			Value: macroURL,
-		},
-		{
-			Name:  "orig_url",
-			Value: origURL,
 		},
 		{
 			Name:  "url_size",
@@ -339,7 +322,6 @@ func duplicateExistingMacro(client *bigquery.Client, macroName string, macroToDu
 		client,
 		macroName,
 		macroToDuplicate.URL,
-		macroToDuplicate.OrigURL,
 		macroToDuplicate.URLSize,
 		macroToDuplicate.Width,
 		macroToDuplicate.Height,

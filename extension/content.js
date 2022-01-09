@@ -27,7 +27,6 @@ const maxTopUsagesToStore = 1;
 const maxSuggestionsFreshnessDuration = 60 * 60 * 24 * 1000;
 const macroNamePrefix = 'github-macros-';
 const loadMorePixelsBeforeScrollEnd = 200;
-const hostnameToPattern = new Map();
 const contentCache = new Map();
 const macroNameToUrl = new Map();
 const tooltipsCache = new Map();
@@ -47,12 +46,15 @@ const gNetworkErrorType = "net"
 const gDirectUsageTriggerType = 'direct'
 const gClickUsageTriggerType = 'click'
 
+const gGithubMediaPattern = '![$name]($url)';
+
 
 reportClientError = function(type, stacktrace) {
     $.post( 
         "https://us-central1-github-macros.cloudfunctions.net/client_error/",
         { version: gVersion, type: type, stacktrace: stacktrace},
     );
+    // console.log(stacktrace)
 }
 
 catchAndLog = function(f) {
@@ -61,7 +63,6 @@ catchAndLog = function(f) {
             return f.apply(this, arguments);
         } catch (e) {
             reportClientError(gJavascriptErrorType, e.stack);
-            console.log(e.stack)
         }
     }
 }
@@ -204,8 +205,7 @@ initSearchInput = function (targetId) {
  * appear. Each site might have its own format.
  */ 
 getInjectedMacro = function(name, url) {
-    const pattern = hostnameToPattern.get(location.hostname);
-    return pattern.replace('$name', macroNamePrefix+name).replace('$url', url);
+    return gGithubMediaPattern.replace('$name', macroNamePrefix+name).replace('$url', url);
 }
 
 selectMacro = function(targetId, macro) {
@@ -358,19 +358,24 @@ createSingleMacro = function(targetId, item) {
     return div
 }
 
-addMacroToUI = function(targetId, macro) {
+addMacroToUI = function(targetId, macro, addAtTheEnd) {
     meta = tooltipsCache.get(targetIdToTarget.get(targetId))
 
     var div;
     if (meta['left_height'] <= meta['right_height']) {
         div = getElement(targetId, 'leftMacros');
-        meta['left_height'] += macro['height'];
+        meta['left_height'] += ((macro['height'] / macro['width'])) * 0.55;
     } else {
         div = getElement(targetId, 'rightMacros');
-        meta['right_height'] += macro['height'];
+        meta['right_height'] += (macro['height'] / macro['width']) * 0.45;
     }
 
-    div.appendChild(createSingleMacro(targetId, macro));
+    if (addAtTheEnd) {
+        div.appendChild(createSingleMacro(targetId, macro));
+    } else {
+        div.prepend(createSingleMacro(targetId, macro));
+    }
+    
 }
 
 clearAllMacrosFromUI = function(targetId) {
@@ -389,7 +394,7 @@ updateUIWithContent = function (targetId, content, isFirstPage) {
     getElement(targetId, 'moreResultsSpinner').style.display = content['has_more'] ? 'inline' : 'none';
     const items = content['data'];
     for (var i = 0; i < items.length; i++) {
-        addMacroToUI(targetId, items[i]);
+        addMacroToUI(targetId, items[i], true);
     }
 }
 
@@ -836,15 +841,6 @@ validateInput = function(macroName, macroURL) {
     return ErrorCodes.Success
 }
 
-isGitHubMediaLink = function(macroURL) {
-    try {
-        url = new URL(macroURL);
-        return url.hostname.endsWith('githubusercontent.com');
-    } catch {
-        return false;
-    }
-}
-
 var addingNewMacro = false
 
 addNewMacro = function(targetId) {
@@ -865,75 +861,40 @@ addNewMacro = function(targetId) {
         return
     }
 
-    fireAddNewMacroRequest = (url, origURL) => {
-        ajax({
-            url: "https://us-central1-github-macros.cloudfunctions.net/add/",
-            type: 'POST',
-            data: { 
-                name: macroName,
-                url: url,
-                orig_url: origURL,
-            },
-            success: function(responseText) {
-                const response = JSON.parse(responseText);
-                if (response['code'] != ErrorCodes.Success) {
-                    addNewMacroShowErrorMessage(targetId, response['code']); 
-                    return
-                }
-
-                addNewMacroShowSuccessMessage(targetId);
-
-                const newMacro = response['data'];
-
-                macroNameToUrl.set(macroName, macroURL);
-
-                getElement(targetId, 'macroSearchInput').value = "";
-                getElement(targetId, 'macrosSection').scrollTop = 0;
-                
-                addMacroToUI(targetId, newMacro);                
-            },
-            fail: function() {
-                addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
-            },
-            complete: function() {
-                addingNewMacro = false;
-            }
-        })
-    }
-
     addingNewMacro = true;
 
-    if (isGitHubMediaLink(macroURL)) {
-        fireAddNewMacroRequest(macroURL);
-        return;
-    }
-
-    const authToken = $("input[type='hidden'][data-csrf='true'][class='js-data-preview-url-csrf']" )[0]
-    if (!authToken || !authToken.value) {
-        fireAddNewMacroRequest(macroURL);
-    }
-
-    const boundary = "----WebKitFormBoundary" + makeid(16)
-
     ajax({
-        url: 'https://github.com/preview',
+        url: "https://us-central1-github-macros.cloudfunctions.net/add/",
         type: 'POST',
-        data: `--${boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n![github-macros-new-url](${macroURL})\r\n--${boundary}\r\nContent-Disposition: form-data; name=\"authenticity_token\"\r\n\r\n${authToken.value}\r\n--${boundary}--\r\n`,
-        headers: {
-            "content-type": `multipart/form-data; boundary=${boundary}`,
+        data: { 
+            name: macroName,
+            url: macroURL,
         },
-        success: function (data) {
-            const responseImage = $($.parseHTML(data)).find('img')[0]
-            if (!responseImage || !responseImage.src) {
-                fireAddNewMacroRequest(macroURL);    
-            } else {
-                fireAddNewMacroRequest(responseImage.src, macroURL)
+        success: function(responseText) {
+            const response = JSON.parse(responseText);
+            if (response['code'] != ErrorCodes.Success) {
+                addNewMacroShowErrorMessage(targetId, response['code']); 
+                return
             }
+
+            addNewMacroShowSuccessMessage(targetId);
+
+            const newMacro = response['data'];
+
+            macroNameToUrl.set(macroName, macroURL);
+
+            getElement(targetId, 'macroSearchInput').value = "";
+            getElement(targetId, 'macrosSection').scrollTop = 0;
+            
+            addMacroToUI(targetId, newMacro, false);                
         },
         fail: function() {
-            fireAddNewMacroRequest(macroURL)
+            addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
         },
-    });     
+        complete: function() {
+            addingNewMacro = false;
+        }
+    })
 }
 
 initNewTooltip = function(targetId) {
@@ -1032,10 +993,6 @@ initKeyboardListeners = function() {
     var inputTimerId;
     document.onkeydown = catchAndLog(
         function(ev) {
-            if (!hostnameToPattern.has(location.hostname)) {
-                return
-            }
-
             activeElement = document.activeElement
             // TODO needs to be configured whether we wanna do it also
             // for regular input + exlusion of our input fields
@@ -1088,9 +1045,8 @@ updateTopUsages = function(macro) {
         const newTopUsage = {
             'name': macroName,
             'url': macro['url'],
-            'thumbnail': macro['thumbnail'],
-            'is_gif': macro['is_gif'],
-            'gif_thumbnail': macro['gif_thumbnail'],
+            'width': macro['width'],
+            'height': macro['height'],
             'usages': 1,
         }
         macroTopUsages.push(newTopUsage);
@@ -1136,12 +1092,6 @@ loadSuggestionsFromStorage = function() {
     );
 }
 
-initSupportedHostNames = function() {
-    // TODO load from storage with a callback to trigger the rest of the init
-    hostnameToPattern.set('github.com', '![$name]($url)');
-    hostnameToPattern.set('gist.github.com', '![$name]($url)');
-}
-
 // put the macro name (appeared in alt property) as the image's title
 processGithubMacroImages = function() {
     $('img').each(function() {
@@ -1153,12 +1103,6 @@ processGithubMacroImages = function() {
 
 window.onload = catchAndLog(
     function() {
-        initSupportedHostNames();
-
-        if (!hostnameToPattern.has(location.hostname)) {
-            return;
-        }
-
         initKeyboardListeners();
         loadSuggestionsFromStorage()
         processGithubMacroImages();

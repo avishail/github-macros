@@ -9,7 +9,6 @@ import (
 type MacroRow struct {
 	Name    string `json:"name"`
 	URL     string `json:"url"`
-	OrigURL string `json:"orig_url" bigquery:"orig_url"`
 	URLSize int64  `json:"url_size" bigquery:"url_size"`
 	Width   int64  `json:"width"`
 	Height  int64  `json:"height"`
