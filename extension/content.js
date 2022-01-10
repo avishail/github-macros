@@ -1,9 +1,3 @@
-/*
-
-1. test load more
-
-*/
-
 
 class ErrorCodes {
     static Success = 0
@@ -342,16 +336,31 @@ createSingleMacro = function(targetId, item) {
     image.src = item['url'];
     image.title = item['name'];
     image.style.display = 'block';
-    image.onerror = function () {
-        div.parentElement.removeChild(div);
-        ajaxPost(
-            "https://us-central1-github-macros.cloudfunctions.net/report/", 
-            { name: item["name"] },
-        );
-    };
-    image.onload = function () {
-        spinnerWrapper.parentElement.removeChild(spinnerWrapper); 
+
+    handleImageLoadError = (wrapperDiv) => {
+        if (wrapperDiv.parentElement) {
+            wrapperDiv.parentElement.removeChild(wrapperDiv);
+            ajaxPost(
+                "https://us-central1-github-macros.cloudfunctions.net/report/",
+                { name: item["name"] },
+            );
+        }
     }
+
+    image.onerror = catchAndLog(
+        function () {
+            handleImageLoadError(div);
+        },
+    )
+    image.onload = catchAndLog(
+        function () {
+            if (image.naturalWidth !== item['width'] || image.naturalHeight !== item['height']) {
+                handleImageLoadError(div);
+                return
+            }
+            spinnerWrapper.parentElement.removeChild(spinnerWrapper);
+        },
+    )
 
     div.appendChild(image)
 
