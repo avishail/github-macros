@@ -805,7 +805,7 @@ errCodeToHTML = function(targetId, errCode) {
         case ErrorCodes.EmptyURL:
             return "URL is empy";
         case ErrorCodes.InvalidURL:
-            return "URL is not a valid";
+            return "URL is not valid";
         case ErrorCodes.URLHostnameNotSupported:
             return "Only Github URLs are allowed. Drop the image into the comment box and get its URL from the Preview tab";
         case ErrorCodes.FileIsTooBig:
