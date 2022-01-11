@@ -803,17 +803,17 @@ errCodeToHTML = function(targetId, errCode) {
         case ErrorCodes.NameAlreadyExist:
             return "Name is already taken";
         case ErrorCodes.EmptyURL:
-            return "URL is empy"
+            return "URL is empy";
         case ErrorCodes.InvalidURL:
-            return "URL is not valid"
+            return "URL is not a valid";
         case ErrorCodes.URLHostnameNotSupported:
-            return "Only Github URLs are allowed. Drop the image into the comment box and get its URL from the Preview tab"
+            return "Only Github URLs are allowed. Drop the image into the comment box and get its URL from the Preview tab";
         case ErrorCodes.FileIsTooBig:
-            return `Image exceeds 10Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`
+            return `Image exceeds 10Mb. Please reduce its size and try again. You can use <a target="_blank" href="https://ezgif.com/optimize">this</a> website to do it`;
         case ErrorCodes.FileFormatNotSupported:
-            return "File format is not supported"
+            return "URL is not a valid supported image (jpeg/png/gif/bmp)";
         case ErrorCodes.TransientError:
-            return "Something went wrong, please try again later"
+            return "Something went wrong, please try again later";
     }
 }
 
@@ -850,7 +850,73 @@ validateInput = function(macroName, macroURL) {
     return ErrorCodes.Success
 }
 
+isGitHubMediaLink = function(macroURL) {
+    try {
+        url = new URL(macroURL);
+        return url.hostname.endsWith('githubusercontent.com');
+    } catch {
+        return false;
+    }
+}
+
 var addingNewMacro = false
+
+fireAddNewMacroRequest = function(targetId, macroName, origURL, githubURL) {
+    ajax({
+        url: "https://us-central1-github-macros.cloudfunctions.net/add/",
+        type: 'POST',
+        data: { 
+            name: macroName,
+            url: origURL,
+            github_url: githubURL,
+        },
+        success: function(responseText) {
+            const response = JSON.parse(responseText);
+            if (response['code'] != ErrorCodes.Success) {
+                addNewMacroShowErrorMessage(targetId, response['code']); 
+                return
+            }
+
+            addNewMacroShowSuccessMessage(targetId);
+
+            const newMacro = response['data'];
+
+            macroNameToUrl.set(macroName, macroURL);
+
+            getElement(targetId, 'macroSearchInput').value = "";
+            getElement(targetId, 'macrosSection').scrollTop = 0;
+            
+            addMacroToUI(targetId, newMacro, false);
+        },
+        fail: function() {
+            addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
+        },
+        complete: function() {
+            addingNewMacro = false;
+        }
+    })
+}
+
+validateImageBeforeAdd = function(targetId, macroName, origURL, githubURL) {
+    if (!githubURL) {
+        fireAddNewMacroRequest(targetId, macroName, origURL, githubURL);
+        return;
+    }
+
+    const testImage = document.createElement('img');
+    testImage.onerror = catchAndLog(
+        function() {
+            addNewMacroShowErrorMessage(targetId, ErrorCodes.FileFormatNotSupported);
+        }
+    )
+    testImage.onload = catchAndLog(
+        function() {
+            fireAddNewMacroRequest(targetId, macroName, origURL, githubURL);
+        },
+    );
+
+    testImage.src = githubURL;
+}
 
 addNewMacro = function(targetId) {
     if (addingNewMacro) {
@@ -872,38 +938,36 @@ addNewMacro = function(targetId) {
 
     addingNewMacro = true;
 
+    if (isGitHubMediaLink(macroURL)) {
+        fireAddNewMacroRequest(targetId, macroName, macroURL, "");
+    }
+
+    const authToken = $("input[type='hidden'][data-csrf='true'][class='js-data-preview-url-csrf']" )[0]
+    if (!authToken || !authToken.value) {
+        fireAddNewMacroRequest(targetId, macroName, macroURL, "");
+    }
+
+    const boundary = "----WebKitFormBoundary" + makeid(16)
+
     ajax({
-        url: "https://us-central1-github-macros.cloudfunctions.net/add/",
+        url: 'https://github.com/preview',
         type: 'POST',
-        data: { 
-            name: macroName,
-            url: macroURL,
+        data: `--${boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n![github-macros-new-url](${macroURL})\r\n--${boundary}\r\nContent-Disposition: form-data; name=\"authenticity_token\"\r\n\r\n${authToken.value}\r\n--${boundary}--\r\n`,
+        headers: {
+            "content-type": `multipart/form-data; boundary=${boundary}`,
         },
-        success: function(responseText) {
-            const response = JSON.parse(responseText);
-            if (response['code'] != ErrorCodes.Success) {
-                addNewMacroShowErrorMessage(targetId, response['code']); 
-                return
+        success: function (data) {
+            const responseImage = $($.parseHTML(data)).find('img')[0]
+            if (!responseImage || !responseImage.src) {
+                fireAddNewMacroRequest(targetId, macroName, macroURL, "");
+            } else {
+                validateImageBeforeAdd(targetId, macroName, macroURL, responseImage.src);
             }
-
-            addNewMacroShowSuccessMessage(targetId);
-
-            const newMacro = response['data'];
-
-            macroNameToUrl.set(macroName, macroURL);
-
-            getElement(targetId, 'macroSearchInput').value = "";
-            getElement(targetId, 'macrosSection').scrollTop = 0;
-            
-            addMacroToUI(targetId, newMacro, false);                
         },
         fail: function() {
-            addNewMacroShowErrorMessage(targetId, ErrorCodes.TransientError); 
+            fireAddNewMacroRequest(targetId, macroName, macroURL, "")
         },
-        complete: function() {
-            addingNewMacro = false;
-        }
-    })
+    });
 }
 
 initNewTooltip = function(targetId) {

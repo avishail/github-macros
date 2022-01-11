@@ -2,6 +2,7 @@ package p
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -39,14 +40,11 @@ func (r *readerWithMaxSize) Read(p []byte) (n int, err error) {
 
 func sendHTTPGetRequest(requestURL string) ([]byte, error) {
 	client := &http.Client{}
-	req, err := http.NewRequest(http.MethodGet, requestURL, http.NoBody)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, requestURL, http.NoBody)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to send HTTP request: %v", err)
 	}
-
-	req.Header.Add("origin", "https://github.com")
-	req.Header.Add("referer", "https://github.com")
 
 	resp, err := client.Do(req)
 	if err != nil {

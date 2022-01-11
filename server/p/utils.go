@@ -7,11 +7,12 @@ import (
 )
 
 type MacroRow struct {
-	Name    string `json:"name"`
-	URL     string `json:"url"`
-	URLSize int64  `json:"url_size" bigquery:"url_size"`
-	Width   int64  `json:"width"`
-	Height  int64  `json:"height"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	URLSize   int64  `json:"url_size" bigquery:"url_size"`
+	Width     int64  `json:"width"`
+	Height    int64  `json:"height"`
+	GithubURL string `json:"github_url" bigquery:"github_url"`
 }
 
 func runQuery(ctx context.Context, query *bigquery.Query) (*bigquery.RowIterator, error) {

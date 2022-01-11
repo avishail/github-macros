@@ -75,7 +75,7 @@ func testAddMutation() {
 		Method: http.MethodPost,
 		Body: io.NopCloser(
 			strings.NewReader(
-				"name=battleshipit&url=https://user-images.githubusercontent.com/10358078/142379224-23b6e6e5-d45d-4bc6-a183-733b831a622d.jpeg",
+				"name=example&url=https://www.researchgate.net/profile/Tama-Leaver/publication/301644273/figure/fig2/AS:362433639141377@1463422321730/Example-of-the-One-does-not-simply-meme-created-with-MemeGenerator.png&github_url=https://camo.githubusercontent.com/bdafd73963fbf563a5beba36eda5644daf04987f30350cfa710a2fba3b5b120f/68747470733a2f2f7777772e7265736561726368676174652e6e65742f70726f66696c652f54616d612d4c65617665722f7075626c69636174696f6e2f3330313634343237332f6669677572652f666967322f41533a33363234333336333931343133373740313436333432323332313733302f4578616d706c652d6f662d7468652d4f6e652d646f65732d6e6f742d73696d706c792d6d656d652d637265617465642d776974682d4d656d6547656e657261746f722e706e67",
 			),
 		),
 		Header: http.Header{
@@ -170,9 +170,9 @@ func main() {
 
 	//testSearchQuery()
 	//testGetQuery()
-	//testSuggestionQuery()
+	testSuggestionQuery()
 	// testUsage()
-	testAddMutation()
+	//testAddMutation()
 	//testUsage()
 	//testReportMutation()
 
@@ -184,6 +184,9 @@ func main() {
 	// 	return
 	// }
 	// defer client.Close()
+
+	// ghi, err := p.GetGithubImages(client, "https://i.imgur.com/lqKlotB.png")
+	// fmt.Println(ghi, err)
 
 	// query := client.Query(`
 	// 	INSERT INTO github-macros.macros.reports (macro_name, reports) VALUES ("abc", 0);
