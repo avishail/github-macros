@@ -39,15 +39,6 @@ const (
 
 type ErrorCode = int
 
-func isGithubMedia(macroURL string) bool {
-	u, err := url.Parse(macroURL)
-	if err != nil {
-		return false
-	}
-
-	return strings.HasSuffix(u.Host, "githubusercontent.com")
-}
-
 func validateFileSizeAndType(fileSize int64, fileType string, maxSize int64) ErrorCode {
 	if fileSize > maxSize {
 		return FileIsTooBig
@@ -58,6 +49,15 @@ func validateFileSizeAndType(fileSize int64, fileType string, maxSize int64) Err
 	}
 
 	return Success
+}
+
+func isGithubMedia(macroURL string) bool {
+	u, err := url.Parse(macroURL)
+	if err != nil {
+		return false
+	}
+
+	return strings.HasSuffix(u.Hostname(), "githubusercontent.com")
 }
 
 func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
@@ -72,6 +72,7 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 
 	macroName := r.Form.Get("name")
 	macroURL := r.Form.Get("url")
+	macroGithubURL := r.Form.Get("github_url")
 
 	if errCode := staticNameAndURLValidation(macroName, macroURL); errCode != Success {
 		return nil, errCode
@@ -88,7 +89,20 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 		return newMacro, Success
 	}
 
-	fileSize, fileType, errCode := getFileSizeAndType(macroURL)
+	isMacroURLGithubMedia := isGithubMedia(macroURL)
+
+	if isMacroURLGithubMedia {
+		macroGithubURL = macroURL
+	}
+
+	if !isMacroURLGithubMedia && !isGithubMedia(macroGithubURL) {
+		macroGithubURL, err = GetGithubImage(client, macroURL)
+		if err != nil {
+			log.Panicf("failed to get github image: %v", err)
+		}
+	}
+
+	fileSize, fileType, errCode := getFileSizeAndType(macroGithubURL)
 	if errCode != Success {
 		return nil, errCode
 	}
@@ -97,13 +111,13 @@ func executaAdd(r *http.Request) (*MacroRow, ErrorCode) {
 		return nil, errCode
 	}
 
-	width, height := getMacroDimensions(macroURL)
+	width, height := getMacroDimensions(macroGithubURL)
 
-	insertNewMacro(client, macroName, macroURL, fileSize, width, height)
+	insertNewMacro(client, macroName, macroURL, macroGithubURL, fileSize, width, height)
 
 	return &MacroRow{
 		Name:   macroName,
-		URL:    macroURL,
+		URL:    macroGithubURL,
 		Width:  width,
 		Height: height,
 	}, Success
@@ -281,13 +295,13 @@ func getRespons(responseMap map[string]interface{}) (string, error) {
 
 func insertNewMacro(
 	client *bigquery.Client,
-	macroName, macroURL string,
+	macroName, macroURL, macroGithubURL string,
 	macroSize, width, height int64,
 ) {
 	query := client.Query(`
 		INSERT INTO github-macros.macros.macros 
-		(name, url, url_size, width, height)
-		VALUES (@name, @url, @url_size, @width, @height)
+		(name, url, github_url, url_size, width, height)
+		VALUES (@name, @url, @github_url, @url_size, @width, @height)
 	`)
 	query.Parameters = []bigquery.QueryParameter{
 		{
@@ -297,6 +311,10 @@ func insertNewMacro(
 		{
 			Name:  "url",
 			Value: macroURL,
+		},
+		{
+			Name:  "github_url",
+			Value: macroGithubURL,
 		},
 		{
 			Name:  "url_size",
@@ -322,6 +340,7 @@ func duplicateExistingMacro(client *bigquery.Client, macroName string, macroToDu
 		client,
 		macroName,
 		macroToDuplicate.URL,
+		macroToDuplicate.GithubURL,
 		macroToDuplicate.URLSize,
 		macroToDuplicate.Width,
 		macroToDuplicate.Height,

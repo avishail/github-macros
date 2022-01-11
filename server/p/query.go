@@ -35,7 +35,7 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		query = client.Query(`
 			SELECT 
 				name,
-				url,
+				github_url AS url,
 				width,
 				height,
 				(CASE WHEN Usages.clicks is NULL THEN 0 ELSE Usages.clicks END) + (CASE WHEN Usages.directs is NULL THEN 0 ELSE Usages.directs END) as usages,
@@ -63,7 +63,7 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		}
 	case queryTypeGet:
 		log.Printf("get: %s", queryText)
-		query = client.Query("SELECT name, url, width, height FROM `github-macros.macros.macros` WHERE name=@name")
+		query = client.Query("SELECT name, github_url AS url, width, height FROM `github-macros.macros.macros` WHERE name=@name")
 		query.Parameters = []bigquery.QueryParameter{
 			{
 				Name:  "name",
@@ -75,7 +75,7 @@ func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error)
 		query = client.Query(`
 			SELECT
 				name,
-				url,
+				github_url AS url,
 				width,
 				height,
 				(CASE WHEN Usages.clicks is NULL THEN 0 ELSE Usages.clicks END) + (CASE WHEN Usages.directs is NULL THEN 0 ELSE Usages.directs END) as usages

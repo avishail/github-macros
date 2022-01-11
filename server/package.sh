@@ -4,7 +4,7 @@ rm ~/Downloads/cloudfunction-$1.zip
 
 case $1 in
 	add)
-        zip -j ~/Downloads/cloudfunction-$1.zip go.mod ./p/add.go ./p/gist.go ./p/add_utils.go ./p/query_utils.go ./p/utils.go
+        zip -j ~/Downloads/cloudfunction-$1.zip go.mod ./p/add.go ./p/gist.go ./p/add_utils.go ./p/query_utils.go ./p/utils.go ./p/gist.go
         break
 		;;
 	client_error)
