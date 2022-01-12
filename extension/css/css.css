@@ -70,10 +70,49 @@
     scrollbar-width: none;  /* Firefox */
 }
 
-.tooltipBorder .jBox-container,
-.tooltipBorder .jBox-pointer:after {
+.ghMacros-lightThemeBackground {
+    background-color: #234C87;
+}
+
+.ghMacros-darkThemeBackground {
+    background-color: #3f82e0;
+}
+
+.ghMacros-lightThemeHoverBackground {
+    background-color: #4f6a91;
+}
+
+.ghMacros-darkThemeHoverBackground {
+    background-color: #255496;
+}
+
+.ghMacros-darkBorderColor {
+    border-color: #3f82e0;
+}
+
+.ghMacros-lightBorderColor {
+    border-color: #234C87;
+}
+
+.ghMacros-lightTooltip .jBox-container,
+.ghMacros-lightTooltip .jBox-pointer:after {
     border: 2px solid #234C87;
 }
+
+.ghMacros-darkDimmedTooltip .jBox-container,
+.ghMacros-darkDimmedTooltip .jBox-pointer:after {
+    border: 2px solid #3f82e0;
+    background-color: #22272d;
+}
+
+
+.ghMacros-darkTooltip .jBox-container,
+.ghMacros-darkTooltip .jBox-pointer:after {
+    border: 2px solid #3f82e0;
+    background-color: #0e1117;
+}
+
+
 
 .gh-macros-box-shadow {
     box-shadow: 0px 6px 10px rgba(0, 0, 0, 0.14), 0px 1px 18px rgba(0, 0, 0, 0.12), 0px 3px 5px rgba(0, 0, 0, 0.2);

@@ -43,6 +43,38 @@ const gClickUsageTriggerType = 'click'
 const gGithubMediaPattern = '![$name]($url)';
 
 
+compareVersions = function(versionA, versionB, partsToCompare) {
+    const versionAParts = versionA.split(".");
+    const versionBParts = versionB.split(".");
+
+    while (versionAParts.length < versionBParts.length) {
+        versionAParts.push("0");
+    }
+
+    while (versionBParts.length < versionAParts.length) {
+        versionBParts.push("0");
+    }
+
+    if (!partsToCompare) {
+        partsToCompare = versionAParts.length;
+    }
+
+    for (i = 0; i < partsToCompare; i++) {
+        const verAPart = parseInt(versionAParts[i]);
+        const verBPart = parseInt(versionBParts[i]);
+
+        if (verAPart > verBPart) {
+            return 1;
+        }
+
+        if (verAPart < verBPart) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 reportClientError = function(type, stacktrace) {
     $.post( 
         "https://us-central1-github-macros.cloudfunctions.net/client_error/",
@@ -113,6 +145,16 @@ ajaxPost = function(url, data, success) {
         },
     )
 }
+
+const isDarkMode = function() {
+    const item = document.documentElement.attributes.getNamedItem('data-color-mode');
+    if (!item) {
+        return false;
+    }
+
+    return item.value === 'dark';
+}
+
 
 getElement = function(targetId, id) {
     return $('#' + targetId + '_' + id)[0]
@@ -307,6 +349,8 @@ createSingleMacro = function(targetId, item) {
     div.style.borderStyle = 'solid';
     div.style.borderWidth = '1px';
     div.style.borderColor = '#234C87';
+
+    div.classList.add(isDarkMode() ? 'ghMacros-darkBorderColor' : 'ghMacros-lightBorderColor')
     
     div.style.position = 'relative';
     div.onclick = function() {selectMacro(targetId, item);};
@@ -318,7 +362,6 @@ createSingleMacro = function(targetId, item) {
     spinnerWrapper.style.position = 'absolute';
     spinnerWrapper.style.justifyContent = 'center';
     spinnerWrapper.style.alignItems = 'center';
-
 
     const spinner = document.createElement('div');
     spinner.classList.add("gh-macros-loader");
@@ -342,7 +385,7 @@ createSingleMacro = function(targetId, item) {
             wrapperDiv.parentElement.removeChild(wrapperDiv);
             ajaxPost(
                 "https://us-central1-github-macros.cloudfunctions.net/report/",
-                { name: item["name"] },
+                { name: item["name"], version: gVersion },
             );
         }
     }
@@ -407,16 +450,39 @@ updateUIWithContent = function (targetId, content, isFirstPage) {
     }
 }
 
+getDarkModeTheme = function() {
+    const item = document.documentElement.attributes.getNamedItem('data-dark-theme')
+    if (!item) {
+        return null;
+    }
+
+    return item.value;
+}
+
+getTooltipCssClass = function() {
+    if (!isDarkMode()) {
+        return 'ghMacros-lightTooltip';
+    }
+
+    if (getDarkModeTheme() === 'dark_dimmed') {
+        return 'ghMacros-darkDimmedTooltip';
+    }
+
+    return 'ghMacros-darkTooltip';
+}
+
 createTooltip = function(targetId, target) {
     const idPrefix = targetId + '_';
     var fetchWasCalled = false;
     var resizeObserver;
 
+    var colorMode = isDarkMode() ? 'dark' : 'light'
+
     return new jBox(
         'Tooltip',
         {
             target: target,
-            addClass: 'tooltipBorder',
+            addClass: getTooltipCssClass(),
             width: '300px',
             height: '400px',
             closeOnEsc: true,
@@ -511,15 +577,15 @@ createTooltip = function(targetId, target) {
             content:`
             <div id="${idPrefix}macroMainWindow" style="width: 100%; height: 100%; position: absolute; top: 0px; left: 0px; right: 0px; bottom: 0px; overflow: hidden">
                 <div style="display: flex; flex-direction: row; height: 55px;">
-                    <div style="display: flex; flex-direction: row; width: 100%; height: auto; margin: 10px; border-width: 1px; border-style: solid none solid solid; border-color: #234C87; border-radius: 18px; overflow: auto">
+                    <div class="ghMacros-${colorMode}BorderColor" style="display: flex; flex-direction: row; width: 100%; height: auto; margin: 10px; border-width: 1px; border-style: solid none solid solid; border-color: #234C87; border-radius: 18px; overflow: auto">
                         <div style="display: flex; margin-left: 10px; width: 15px; height: 15px; justify-content: center; align-items: center; height: 100%; ">
                             <img id="${idPrefix}searchIcon" style="width: 15px; height: 15px;" src="${gMagGlassIconSrc}" />
                             <div id="${idPrefix}searchSpinner" style="display: none;" class="gh-macros-loader gh-macros-dark-loader"></div>
                         </div>
                         <div style="display: flex; justify-content: center; align-items: center; height: 100%; flex-grow: 1;">
-                            <input class="gh-macros-no-outline" type="text" id="${idPrefix}macroSearchInput" style="width: 100%; padding-left: 12px;">
+                            <input class="gh-macros-no-outline" style="background-color: transparent" type="text" id="${idPrefix}macroSearchInput" style="width: 100%; padding-left: 12px;">
                         </div>
-                        <div style="display: flex; justify-content: center; align-items: center; height: 100%; width: 70px; background-color: #234C87; border-radius: 10px 0 0 10px;">
+                        <div class="ghMacros-${colorMode}ThemeBackground" style="display: flex; justify-content: center; align-items: center; height: 100%; width: 70px; border-radius: 10px 0 0 10px;">
                             <text style="font-family: 'Pragati Narrow'; font-weight: 700; color: white; user-select: none;">Search</text>
                         </div>
                     </div>
@@ -535,12 +601,12 @@ createTooltip = function(targetId, target) {
                         <div class="gh-macros-loader gh-macros-dark-loader" style="font-size: 2px;"></div>
                     </div>
                 </div>
-                <div id="${idPrefix}openMacroCreationButton" class="gh-macros-box-shadow gh-macros-hoover-bg" style="z-index: 1; display: flex; justify-content: center; align-items: center; position: absolute; right: 16px; bottom: 16px; width: 30px; height: 30px; background-color: #234C87; border-radius: 15px;">
+                <div id="${idPrefix}openMacroCreationButton" class="ghMacros-${colorMode}ThemeBackground" gh-macros-box-shadow gh-macros-hoover-bg" style="z-index: 1; display: flex; justify-content: center; align-items: center; position: absolute; right: 16px; bottom: 16px; width: 30px; height: 30px; border-radius: 15px;">
                     <img style="width: 7px; height: 7px" src="${gPlusIconSrc}" />
                 </div>
                 <div id="${idPrefix}addNewMacroWrapper" style="z-index: 2; display: flex; flex-direction: column; position: absolute; bottom: 0; left:0; right: 0; width: 100%; height: 0; align-items: end">
                     <div id="${idPrefix}addNewMacroCloseMargins" style="height: 150px; width: 100%"></div>
-                    <div style="display: flex; flex-direction: column; height: 100%; width: 100%; background-color: #234C87; border-radius: 10px 10px 0px 0px;">
+                    <div class="ghMacros-${colorMode}ThemeBackground" style="display: flex; flex-direction: column; height: 100%; width: 100%; border-radius: 10px 10px 0px 0px;">
                         <div style="text-align: right; margin:10px 10px 0 10px;">
                             <text id="${idPrefix}addNewMacroCloseButton" style="font-family: 'Pragati Narrow'; font-weight: 700; font-size: 12px; color: white; user-select: none;">X</text>
                         </div>
@@ -548,14 +614,14 @@ createTooltip = function(targetId, target) {
                         <div id="${idPrefix}addNewMacroEdit" style="display: flex; flex-direction: column; width: 100%; height: 100%">
                             <div style="margin: 0 15px 15px 15px">
                                 <text style="font-family: 'Pragati Narrow'; font-weight: 400; font-size: 12px; color: white; user-select: none;">Name</text>
-                                <div style="border-radius: 5px; background-color: #ffffff; overflow: hidden;">
-                                    <input class="gh-macros-no-outline" type="text" id="${idPrefix}newMacroName" style="width: 100%; margin: 4px;">
+                                <div style="border-radius: 5px; background-color: #ffffff; overflow: hidden; padding: 4px">
+                                    <input class="gh-macros-no-outline" style="background-color: #ffffff; color: #000000;" type="text" id="${idPrefix}newMacroName" style="width: 100%;">
                                 </div>    
                             </div>
                             <div style="margin: 0 15px 15px 15px">
                                 <text style="font-family: 'Pragati Narrow'; font-weight: 400; font-size: 12px; color: white; user-select: none;">URL</text>
-                                <div style="border-radius: 5px; background-color: #ffffff; overflow: hidden;">
-                                    <input class="gh-macros-no-outline" type="text" id="${idPrefix}newMacroURL" style="width: 100%; margin: 4px;">
+                                <div style="border-radius: 5px; background-color: #ffffff; overflow: hidden; padding: 4px;">
+                                    <input class="gh-macros-no-outline" style="background-color: #ffffff; color: #000000;" type="text" id="${idPrefix}newMacroURL" style="width: 100%;">
                                 </div>    
                             </div>
                             <div id="${idPrefix}addNewMacroButton" style="display: flex; border-radius: 4px; margin: 15px 15px 15px 15px; background-color: #FFFFFF; justify-content: center;">
@@ -578,7 +644,7 @@ createTooltip = function(targetId, target) {
                 </div>
                 <div id="${idPrefix}systemMessageWrapper" style="z-index: 2; display: none; flex-direction: column; position: absolute; bottom: 0; left:0; right: 0; width: 100%; height: 0; justify-content: end">
                     <div id="${idPrefix}systemMessageCloseMargins" style="height: 150px; width: 100%"></div>
-                    <div style="display: flex; flex-direction: column; height: auto; width: 100%; background-color: #234C87; border-radius: 10px 10px 0px 0px;">
+                    <div class="ghMacros-${colorMode}ThemeBackground" style="display: flex; flex-direction: column; height: auto; width: 100%; border-radius: 10px 10px 0px 0px;">
                         <div style="text-align: right; margin:10px 10px 0 10px;">
                             <text id="${idPrefix}systemMessageCloseButton" style="font-family: 'Pragati Narrow'; font-weight: 700; font-size: 12px; color: white; user-select: none;">X</text>
                         </div>
@@ -706,10 +772,23 @@ hideAddMacroUI = function(targetId) {
 }
 
 initAddNewMacroLogic = function(targetId) {
+    const themeBackground = isDarkMode() ? 'ghMacros-darkThemeBackground' : 'ghMacros-lightThemeBackground'
+    const themeHoverBackground = isDarkMode() ? 'ghMacros-darkThemeHoverBackground' : 'ghMacros-lightThemeHoverBackground'
+
     // set up add new macro button
     openMacroCreationButton = getElement(targetId, 'openMacroCreationButton');
-    openMacroCreationButton.onmouseover = catchAndLog(function() {openMacroCreationButton.style.background='#526683'});
-    openMacroCreationButton.onmouseout = catchAndLog(function() {openMacroCreationButton.style.background='#234C87'});
+    openMacroCreationButton.onmouseover = catchAndLog(
+        function() {
+            openMacroCreationButton.classList.remove(themeBackground);
+            openMacroCreationButton.classList.add(themeHoverBackground);
+        },
+    );
+    openMacroCreationButton.onmouseout = catchAndLog(
+        function() {
+            openMacroCreationButton.classList.remove(themeHoverBackground);
+            openMacroCreationButton.classList.add(themeBackground);
+        },
+    );
     openMacroCreationButton.onclick = catchAndLog(function() { showAddMacroUI(targetId); });
 
     // set up add new macro UI
@@ -869,6 +948,7 @@ fireAddNewMacroRequest = function(targetId, macroName, origURL, githubURL) {
             name: macroName,
             url: origURL,
             github_url: githubURL,
+            version: gVersion,
         },
         success: function(responseText) {
             const response = JSON.parse(responseText);
@@ -1013,6 +1093,7 @@ requestMacroOnPattern = function(target) {
     const url = new URL('https://us-central1-github-macros.cloudfunctions.net/query/')
     url.searchParams.append('type', 'get')
     url.searchParams.append('text', macroName)
+    url.searchParams.append('version', gVersion)
 
     ajaxGet(
         url,
@@ -1055,7 +1136,7 @@ injectMacroPattern = function(target, name, url) {
         () => {
             ajaxPost( 
                 "https://us-central1-github-macros.cloudfunctions.net/usage/",
-                {name: name, trigger: gDirectUsageTriggerType},
+                {name: name, trigger: gDirectUsageTriggerType, version: gVersion},
             );
         },
         0,
@@ -1174,10 +1255,37 @@ processGithubMacroImages = function() {
       });
 }
 
+checkIfClearCacheIsNeeded = function(onComplete) {
+    chrome.storage.sync.get(
+        ['version'],
+        catchAndLog(
+            function(items) {
+                if (!items['version'] || compareVersions(gVersion, items['version'], 2) == 1) {
+                    chrome.storage.sync.set({
+                        'suggestions': '',
+                        'suggestions_freshness': '',
+                        'system_message': '',
+                        'top_usages': '',
+                        'version': gVersion,
+                    });
+                } else if (items['version'] != gVersion) {
+                    chrome.storage.sync.set({'version': gVersion});
+                }
+
+                onComplete();
+            }
+        ),
+    );
+}
+
 window.onload = catchAndLog(
     function() {
-        initKeyboardListeners();
-        loadSuggestionsFromStorage()
-        processGithubMacroImages();
+        checkIfClearCacheIsNeeded(
+            () => {
+                initKeyboardListeners();
+                loadSuggestionsFromStorage()
+                processGithubMacroImages();
+            }
+        )
     },
 )
