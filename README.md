@@ -15,7 +15,7 @@ It is a chrome extension that lets you to easily pop up a media selection UI and
 
 You have successfully installed Github Macros chrome extension :)
 
-If you already installed it and want to update it after pulling new version, on the extensions screen click on the reload button on the exstension's card.
+If you already installed it and want to update it after pulling new version, on the [extensions screen](chrome://extensions) click on the reload button on the exstension's card
 
 ## How to use?
 
