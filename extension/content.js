@@ -152,7 +152,7 @@ const isDarkMode = function() {
         return false;
     }
 
-    return item.value === 'dark';
+    return item.value === 'dark' || (item.value === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 }
 
 
