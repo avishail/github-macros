@@ -17,13 +17,19 @@ const queryTypeGet = "get"
 const queryTypeSuggestion = "suggestion"
 const resultsPerPage = 20
 
-func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error) {
-	queryText := r.URL.Query().Get("text")
+func getPage(r *http.Request) int {
 	page, err := strconv.Atoi(r.URL.Query().Get("page"))
 
 	if err != nil {
-		page = 0
+		return 0
 	}
+
+	return page
+}
+
+func getQuery(r *http.Request, client *bigquery.Client) (*bigquery.Query, error) {
+	queryText := r.URL.Query().Get("text")
+	page := getPage(r)
 
 	offset := page * resultsPerPage
 
@@ -133,7 +139,10 @@ func execQuery(r *http.Request) (string, error) {
 	}
 
 	if !isQueryGet {
-		responseMap["has_more"] = len(rows) > resultsPerPage
+		responseMap["has_more"] = hasMore
+		if hasMore {
+			responseMap["next_page"] = getPage(r) + 1
+		}
 	}
 
 	response, err := json.Marshal(responseMap)
