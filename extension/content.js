@@ -76,7 +76,7 @@ compareVersions = function(versionA, versionB, partsToCompare) {
 }
 
 reportClientError = function(type, stacktrace) {
-    $.post( 
+    $.post(
         "https://us-central1-github-macros.cloudfunctions.net/client_error/",
         { version: gVersion, type: type, stacktrace: stacktrace},
     );
@@ -210,7 +210,7 @@ initSearchInput = function (targetId) {
                         searchText,
                         0,
                         (content) => {
-                            updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
+                            updateCacheWithNewContent(searchText, content);
                             
                             ongoingRequests.delete(searchText);
 
@@ -314,28 +314,42 @@ fetchContent = function(targetId, searchText, pageToFetch, onFinishCallback, onE
     });
 }
 
-updateCacheWithNewContent = function(searchText, items, isRealPage, hasMore) {
+updateCacheWithNewContent = function(searchText, content) {
+    items = content['data']
     if (!contentCache.has(searchText)) {
         contentCache.set(searchText, {'data': [], 'has_more': false, 'next_page': 0})
     }
 
     cachedContent = contentCache.get(searchText)
+    cachedItems = new Set()
+
+    for (const item of cachedContent['data']) {
+        cachedItems.add(item['name'])
+    }
+
+    newItems = []
 
     for (var i = 0; i < items.length; i++) {
         const item = items[i];
+        macroNameToUrl.set(item['name'], item['url']);
 
-        if (macroNameToUrl.has(item['name'])) {
+        if (cachedItems.has(item['name'])) {
             continue;
         }
 
+        newItems.push(item)
+
         cachedContent['data'].push(item);
-        macroNameToUrl.set(item['name'], item['url']);
     }
 
-    if (isRealPage) {
-        cachedContent['next_page'] = cachedContent['next_page'] + 1;
+    if ('next_page' in content) {
+        cachedContent['next_page'] = content['next_page'];
     }
-    cachedContent['has_more'] = hasMore;
+    if ('has_more' in content) {
+        cachedContent['has_more'] = content['has_more'];
+    }
+
+    content['data'] = newItems;
 }
 
 createSingleMacro = function(targetId, item) {
@@ -521,7 +535,7 @@ createTooltip = function(targetId, target) {
                             0,
                             (content) => {
                                 fetchWasCalled = false;
-                                updateCacheWithNewContent('', content['data'], true, content['has_more']);
+                                updateCacheWithNewContent('', content);
                                 updateUIWithContent(targetId, contentCache.get(''), true);
                                 chrome.storage.sync.set({
                                     'suggestions': JSON.stringify(content),
@@ -540,7 +554,7 @@ createTooltip = function(targetId, target) {
                         0,
                         (content) => {
                             fetchWasCalled = false;
-                            updateCacheWithNewContent('', content['data'], true, content['has_more']);
+                            updateCacheWithNewContent('', content);
                             updateUIWithContent(targetId, content, true);
                             chrome.storage.sync.set({
                                 'suggestions': JSON.stringify(content),
@@ -615,13 +629,13 @@ createTooltip = function(targetId, target) {
                             <div style="margin: 0 15px 15px 15px">
                                 <text style="font-family: 'Pragati Narrow'; font-weight: 400; font-size: 12px; color: white; user-select: none;">Name</text>
                                 <div style="border-radius: 5px; background-color: #ffffff; overflow: hidden; padding: 4px">
-                                    <input class="gh-macros-no-outline" style="background-color: #ffffff; color: #000000;" type="text" id="${idPrefix}newMacroName" style="width: 100%;">
+                                    <input class="gh-macros-no-outline" style="width: 100%; background-color: #ffffff; color: #000000;" type="text" id="${idPrefix}newMacroName" style="width: 100%;">
                                 </div>    
                             </div>
                             <div style="margin: 0 15px 15px 15px">
                                 <text style="font-family: 'Pragati Narrow'; font-weight: 400; font-size: 12px; color: white; user-select: none;">URL</text>
                                 <div style="border-radius: 5px; background-color: #ffffff; overflow: hidden; padding: 4px;">
-                                    <input class="gh-macros-no-outline" style="background-color: #ffffff; color: #000000;" type="text" id="${idPrefix}newMacroURL" style="width: 100%;">
+                                    <input class="gh-macros-no-outline" style="width: 100%; background-color: #ffffff; color: #000000;" type="text" id="${idPrefix}newMacroURL" style="width: 100%;">
                                 </div>    
                             </div>
                             <div id="${idPrefix}addNewMacroButton" style="display: flex; border-radius: 4px; margin: 15px 15px 15px 15px; background-color: #FFFFFF; justify-content: center;">
@@ -693,6 +707,30 @@ handleCloseTooltip = function(targetId) {
     targetIdToTarget.get(targetId).focus();
 }
 
+updateMacrosDisplay = function(targetId) {
+    const parentPos = getElement(targetId, 'macrosSection').getBoundingClientRect()
+    const parentHeight = parentPos.height
+
+    isInViewPort = (element) => {
+        const childPos = element.parentElement.getBoundingClientRect();
+
+        const relativeTop = childPos.top - parentPos.top
+        const childHeight = element.parentElement.clientHeight
+
+        return relativeTop + childHeight * 1.2 > 0 && relativeTop*0.9    < parentHeight
+    }
+
+    $(getElement(targetId, 'macrosSection')).find('img').each(
+        function(index, element) {
+            if (isInViewPort(element)) {
+                element.style.display = 'block';
+            } else {
+                element.style.display = 'none';
+            }
+        }
+    )
+}
+
 initMacrosScrollLogic = function(targetId) {
     macrosSection = getElement(targetId, 'macrosSection');
     // init scroll of the macros section
@@ -709,10 +747,16 @@ initMacrosScrollLogic = function(targetId) {
     var loadingMore = false;
     const searchInput = getElement(targetId, 'macroSearchInput');
 
+    var lastScrollTop = macrosSection.scrollTop
     macrosSection.addEventListener(
-        'scroll',
+        "onwheel" in document ? "wheel" : "mousewheel",
         catchAndLog(
             function(e) {
+                if (lastScrollTop != macrosSection.scrollTop) {
+                    setTimeout(() => catchAndLog(updateMacrosDisplay(targetId), 0));
+                    lastScrollTop = macrosSection.scrollTop
+                }
+
                 if (loadingMore) {
                     return
                 }
@@ -737,13 +781,13 @@ initMacrosScrollLogic = function(targetId) {
                         content['next_page'],
                         (data) => { 
                             loadingMore = false;
-                            updateCacheWithNewContent(searchText, content['data'], true, content['has_more']);
+                            updateCacheWithNewContent(searchText, data);
                             // check if in the mean time, the user changed the input
                             if (searchText !== searchInput.value) {
                                 return;
                             }
 
-                            updateUIWithContent(targetId, content, true);
+                            updateUIWithContent(targetId, data, false);
                         },
                         () => { loadingMore = false; },
                     )
@@ -1224,10 +1268,10 @@ loadSuggestionsFromStorage = function() {
 
                     macroTopUsages.length = 0;
                     for (const usage of topUsages) {
-                        macroTopUsages.push(usage)
+                        macroTopUsages.push(usage);
                     }
-
-                    updateCacheWithNewContent('', macroTopUsages.slice(0, numberOfTopUsagesToDisplay), false, true)
+                    content = {'data': macroTopUsages.slice(0, numberOfTopUsagesToDisplay)};
+                    updateCacheWithNewContent('', content);
                 }
                 
                 if (!items['suggestions'] || !items['suggestions_freshness']) {
@@ -1238,9 +1282,8 @@ loadSuggestionsFromStorage = function() {
                     return;
                 }
 
-                
                 content = JSON.parse(items['suggestions'])
-                updateCacheWithNewContent('', content['data'], true, true);
+                updateCacheWithNewContent('', content);
             },
         ),
     );
