@@ -42,6 +42,16 @@ const gClickUsageTriggerType = 'click'
 
 const gGithubMediaPattern = '![$name]($url)';
 
+handleMacrosIntersection = function(entries) {
+    entries.map((entry) => {
+        var display = entry.isIntersecting ? 'block' : 'none';
+        $(entry.target).find('img').each(
+            function(index, element) {
+                element.style.display = display;
+            }
+        )
+    })
+}
 
 compareVersions = function(versionA, versionB, partsToCompare) {
     const versionAParts = versionA.split(".");
@@ -421,6 +431,9 @@ createSingleMacro = function(targetId, item) {
 
     div.appendChild(image)
 
+    const target = targetIdToTarget.get(targetId);
+    tooltipsCache.get(target)['intersection_observer'].observe(div);
+
     return div
 }
 
@@ -485,7 +498,7 @@ getTooltipCssClass = function() {
     return 'ghMacros-darkTooltip';
 }
 
-createTooltip = function(targetId, target) {
+createTooltip = function(targetId, target, intersectionObserver) {
     const idPrefix = targetId + '_';
     var fetchWasCalled = false;
     var resizeObserver;
@@ -535,12 +548,12 @@ createTooltip = function(targetId, target) {
                             0,
                             (content) => {
                                 fetchWasCalled = false;
-                                updateCacheWithNewContent('', content);
-                                updateUIWithContent(targetId, contentCache.get(''), true);
                                 chrome.storage.sync.set({
                                     'suggestions': JSON.stringify(content),
                                     'suggestions_freshness': Date.now().toString()
                                 });
+                                updateCacheWithNewContent('', content);
+                                updateUIWithContent(targetId, contentCache.get(''), true);
                             },
                             () => { fetchWasCalled = false; },
                         )
@@ -585,6 +598,7 @@ createTooltip = function(targetId, target) {
                     if (resizeObserver) {
                         resizeObserver.disconnect();
                     }
+                    intersectionObserver.disconnect()
                     handleCloseTooltip(targetId);
                 },
             ),    
@@ -650,7 +664,7 @@ createTooltip = function(targetId, target) {
                                 </div>
                             </div>
                         </div> 
-                        <div id="${idPrefix}addNewMacroSuccess" style="display: none;flex-direction: column;width: 100%;height: 100%;align-items: center;justify-content: center;">
+                        <div id="${idPrefix}addNewMacroSuccess" style="display: none;flex-direction: column;width: 100%;height: 100%;align-items: center;justify-content: center; padding-left: 16px; padding-right: 16px;">
                             <img src="${gVIconSrc}" style="width: 34px;height: 25px;">
                             <text style="font-family: 'Pragati Narrow';font-weight: 400;font-size: 16px;color: white;user-select: none;margin: 20;text-align: center;">It was added succesfully to the pile and it will remain as long as the original image remains accessible. Thanks for contributing :)</text>
                         </div>   
@@ -684,14 +698,16 @@ makeid = function(length) {
 }
 
 createTooltipMeta = function(target) {
+    const intersectionObserver = new IntersectionObserver(handleMacrosIntersection, {threshold: 0.01});
     const targetId = makeid(10)
-    const tooltip = createTooltip(targetId, target);
+    const tooltip = createTooltip(targetId, target, intersectionObserver);
 
     const newTooltipMeta = {
         'target_id': targetId,
         'tooltip': tooltip,
         'left_height': 0,
         'right_height': 0,
+        'intersection_observer': intersectionObserver,
     };
 
     return newTooltipMeta
@@ -707,41 +723,21 @@ handleCloseTooltip = function(targetId) {
     targetIdToTarget.get(targetId).focus();
 }
 
-updateMacrosDisplay = function(targetId) {
-    const parentPos = getElement(targetId, 'macrosSection').getBoundingClientRect()
-    const parentHeight = parentPos.height
-
-    isInViewPort = (element) => {
-        const childPos = element.parentElement.getBoundingClientRect();
-
-        const relativeTop = childPos.top - parentPos.top
-        const childHeight = element.parentElement.clientHeight
-
-        return relativeTop + childHeight * 1.2 > 0 && relativeTop*0.9    < parentHeight
-    }
-
-    $(getElement(targetId, 'macrosSection')).find('img').each(
-        function(index, element) {
-            if (isInViewPort(element)) {
-                element.style.display = 'block';
-            } else {
-                element.style.display = 'none';
-            }
-        }
-    )
-}
-
 initMacrosScrollLogic = function(targetId) {
     macrosSection = getElement(targetId, 'macrosSection');
     // init scroll of the macros section
     macrosSection.addEventListener(
-        "onwheel" in document ? "wheel" : "mousewheel",
+        'onwheel' in document ? 'wheel' : 'mousewheel',
         catchAndLog(
             e => {
                 e.wheel = e.deltaY ? -e.deltaY : e.wheelDelta/40;
                 macrosSection.scrollTop -= e.wheel;
             },
-        ),    
+        ), 
+        {
+            capture: true,
+            passive: true
+        },   
     );
 
     var loadingMore = false;
@@ -749,11 +745,10 @@ initMacrosScrollLogic = function(targetId) {
 
     var lastScrollTop = macrosSection.scrollTop
     macrosSection.addEventListener(
-        "onwheel" in document ? "wheel" : "mousewheel",
+        'onwheel' in document ? 'wheel' : 'mousewheel',
         catchAndLog(
             function(e) {
                 if (lastScrollTop != macrosSection.scrollTop) {
-                    setTimeout(() => catchAndLog(updateMacrosDisplay(targetId), 0));
                     lastScrollTop = macrosSection.scrollTop
                 }
 
@@ -794,6 +789,10 @@ initMacrosScrollLogic = function(targetId) {
                 }
             },
         ),
+        {
+            capture: true,
+            passive: true
+        },
     );
 }
 
@@ -1005,7 +1004,7 @@ fireAddNewMacroRequest = function(targetId, macroName, origURL, githubURL) {
 
             const newMacro = response['data'];
 
-            macroNameToUrl.set(macroName, macroURL);
+            macroNameToUrl.set(macroName, githubURL || origURL);
 
             getElement(targetId, 'macroSearchInput').value = "";
             getElement(targetId, 'macrosSection').scrollTop = 0;
@@ -1064,6 +1063,7 @@ addNewMacro = function(targetId) {
 
     if (isGitHubMediaLink(macroURL)) {
         fireAddNewMacroRequest(targetId, macroName, macroURL, "");
+        return;
     }
 
     const authToken = $("input[type='hidden'][data-csrf='true'][class='js-data-preview-url-csrf']" )[0]
