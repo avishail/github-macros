@@ -16,7 +16,7 @@ Object.freeze(ErrorCodes);
 
 const gVersion = "1.0.0"
 
-const numberOfTopUsagesToDisplay = 20;
+const numberOfTopUsagesToDisplay = 10;
 const maxTopUsagesToStore = 1;
 const maxSuggestionsFreshnessDuration = 60 * 60 * 24 * 1000;
 const macroNamePrefix = 'github-macros-';
@@ -162,7 +162,17 @@ const isDarkMode = function() {
         return false;
     }
 
-    return item.value === 'dark' || (item.value === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (item.value === 'dark') {
+        return true;
+    }
+
+    if (item.value === 'auto') {
+        const isSystemInDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const themeItem = document.documentElement.attributes.getNamedItem(isSystemInDarkMode ? 'data-dark-theme' : 'data-light-theme');
+        return themeItem && themeItem.value && themeItem.value.includes('dark');
+    }
+
+    return false;
 }
 
 
@@ -327,7 +337,7 @@ fetchContent = function(targetId, searchText, pageToFetch, onFinishCallback, onE
 updateCacheWithNewContent = function(searchText, content) {
     items = content['data']
     if (!contentCache.has(searchText)) {
-        contentCache.set(searchText, {'data': [], 'has_more': false, 'next_page': 0})
+        contentCache.set(searchText, {'data': [], 'has_more': true, 'next_page': 0})
     }
 
     cachedContent = contentCache.get(searchText)
@@ -553,7 +563,7 @@ createTooltip = function(targetId, target, intersectionObserver) {
                                     'suggestions_freshness': Date.now().toString()
                                 });
                                 updateCacheWithNewContent('', content);
-                                updateUIWithContent(targetId, contentCache.get(''), true);
+                                updateUIWithContent(targetId, content, false);
                             },
                             () => { fetchWasCalled = false; },
                         )
@@ -814,24 +824,28 @@ hideAddMacroUI = function(targetId) {
     getElement(targetId, 'addNewMacroErrorMessage').innerHTML = '';
 }
 
-initAddNewMacroLogic = function(targetId) {
+initButtonWithHover = function(buttonElement) {
     const themeBackground = isDarkMode() ? 'ghMacros-darkThemeBackground' : 'ghMacros-lightThemeBackground'
     const themeHoverBackground = isDarkMode() ? 'ghMacros-darkThemeHoverBackground' : 'ghMacros-lightThemeHoverBackground'
 
+    buttonElement.onmouseover = catchAndLog(
+        function() {
+            buttonElement.classList.remove(themeBackground);
+            buttonElement.classList.add(themeHoverBackground);
+        },
+    );
+    buttonElement.onmouseout = catchAndLog(
+        function() {
+            buttonElement.classList.remove(themeHoverBackground);
+            buttonElement.classList.add(themeBackground);
+        },
+    );
+}
+
+initAddNewMacroLogic = function(targetId) {
     // set up add new macro button
     openMacroCreationButton = getElement(targetId, 'openMacroCreationButton');
-    openMacroCreationButton.onmouseover = catchAndLog(
-        function() {
-            openMacroCreationButton.classList.remove(themeBackground);
-            openMacroCreationButton.classList.add(themeHoverBackground);
-        },
-    );
-    openMacroCreationButton.onmouseout = catchAndLog(
-        function() {
-            openMacroCreationButton.classList.remove(themeHoverBackground);
-            openMacroCreationButton.classList.add(themeBackground);
-        },
-    );
+    initButtonWithHover(openMacroCreationButton);
     openMacroCreationButton.onclick = catchAndLog(function() { showAddMacroUI(targetId); });
 
     // set up add new macro UI
@@ -1074,7 +1088,7 @@ addNewMacro = function(targetId) {
     const boundary = "----WebKitFormBoundary" + makeid(16)
 
     ajax({
-        url: 'https://github.com/preview',
+        url: window.location.origin + '/preview',
         type: 'POST',
         data: `--${boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n![github-macros-new-url](${macroURL})\r\n--${boundary}\r\nContent-Disposition: form-data; name=\"authenticity_token\"\r\n\r\n${authToken.value}\r\n--${boundary}--\r\n`,
         headers: {
