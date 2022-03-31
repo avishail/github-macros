@@ -14,7 +14,7 @@ class ErrorCodes {
 
 Object.freeze(ErrorCodes); 
 
-const gVersion = "1.0.0"
+const gVersion = "1.0.4"
 
 const numberOfTopUsagesToDisplay = 10;
 const maxTopUsagesToStore = 1;
@@ -41,6 +41,8 @@ const gDirectUsageTriggerType = 'direct'
 const gClickUsageTriggerType = 'click'
 
 const gGithubMediaPattern = '![$name]($url)';
+
+var addingNewMacro = false;
 
 handleMacrosIntersection = function(entries) {
     entries.map((entry) => {
@@ -957,6 +959,8 @@ addNewMacroShowErrorMessage = function(targetId, errCode) {
     getElement(targetId, 'addNewMacroSpinner').style.display = 'none';
     getElement(targetId, 'addNewMacroError').style.display = 'flex';
     getElement(targetId, 'addNewMacroErrorMessage').innerHTML = errCodeToHTML(targetId, errCode);
+
+    addingNewMacro = false;
 }
 
 addNewMacroShowSuccessMessage = function(targetId) {
@@ -994,8 +998,6 @@ isGitHubMediaLink = function(macroURL) {
         return false;
     }
 }
-
-var addingNewMacro = false
 
 fireAddNewMacroRequest = function(targetId, macroName, origURL, githubURL) {
     ajax({
