@@ -14,7 +14,7 @@ class ErrorCodes {
 
 Object.freeze(ErrorCodes); 
 
-const gVersion = "1.0.4"
+const gVersion = "1.0.5"
 
 const numberOfTopUsagesToDisplay = 10;
 const maxTopUsagesToStore = 1;

@@ -1,8 +1,8 @@
 {
   "name": "GitHub Macros",
   "description": "Allow the developer to easily add images and gifs to comments",
-  "version": "1.0.4",
-  "version_name": "1.0.4",
+  "version": "1.0.5",
+  "version_name": "1.0.5",
   "manifest_version": 3,
   "permissions": ["storage"],
   "action": {
